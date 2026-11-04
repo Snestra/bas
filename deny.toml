@@ -1,0 +1,5 @@
+[advisories]
+# Every advisory fails the audit except the one below.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "Reached through bitwarden 2.1.0, bitwarden-crypto 3.0.0, and rsa 0.10.0-rc.20. No patched rsa release exists. Reviewed 2026-11-04." },
+]

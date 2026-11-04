@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  dependency:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: Check advisories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dependency-evidence
+          cargo deny check advisories 2>&1 | tee dependency-evidence/advisories.log
+      - name: Record dependency trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dependency-evidence
+          cargo tree --locked > dependency-evidence/dependency-trees.txt
+          for package in zbus zbus_names zvariant zvariant_derive; do
+            if cargo tree --locked --target all -i "$package" >> dependency-evidence/dependency-trees.txt 2>&1; then
+              echo "unexpected dependency: $package" | tee -a dependency-evidence/dependency-trees.txt
+              exit 1
+            fi
+          done
+          cargo tree --locked --target all -i rsa >> dependency-evidence/dependency-trees.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-evidence
+          path: dependency-evidence/
+          if-no-files-found: error
+
+  cargo:
+    name: cargo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo doc --locked --no-deps
+      - name: Build release executables
+        run: cargo build --locked --release --bin bas --example e2e
+      - name: Package and check the extracted executable
+        env:
+          BUILD_OS: ${{ runner.os }}
+          BUILD_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          binary=bas
+          e2e_binary=e2e
+          root="$PWD"
+          if [[ "$BUILD_OS" == Windows ]]; then
+            binary=bas.exe
+            e2e_binary=e2e.exe
+            root="$(cygpath -w "$PWD")"
+          fi
+          archive="bas-${BUILD_OS}-${BUILD_ARCH}.tar.gz"
+          evidence="e2e-${BUILD_OS}-${BUILD_ARCH}"
+          mkdir package extracted
+          cp "target/release/$binary" package/
+          cp README.md package/
+          tar -czf "$archive" -C package .
+          tar -xzf "$archive" -C extracted
+          cmp "target/release/$binary" "extracted/$binary"
+          "target/release/examples/$e2e_binary" offline \
+            --bas "$root/extracted/$binary" \
+            --artifacts "$root/$evidence" \
+            --source-revision "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ runner.os }}-${{ runner.arch }}
+          path: e2e-*/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bas-${{ runner.os }}-${{ runner.arch }}
+          path: bas-*.tar.gz
+          if-no-files-found: error
+
+  msrv:
+    name: cargo check (minimum Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install minimum Rust
+        run: rustup toolchain install 1.89.0 --profile minimal --no-self-update
+      - run: cargo +1.89.0 check --locked --all-targets --all-features
