@@ -536,8 +536,12 @@ impl Profiles {
         );
     }
 
-    /// Removes a direct profile in memory. Returns `false` when it was not configured.
+    /// Removes a direct profile and its listener record in memory, so the saved file stays
+    /// loadable. Returns `false` when the profile was not configured.
+    ///
+    /// Call [`Profiles::remove_listener`] first to learn which paired devices to forget.
     pub fn remove(&mut self, name: &ProfileName) -> bool {
+        self.file.listeners.remove(name);
         self.file.profiles.remove(name).is_some()
     }
 
