@@ -22,11 +22,11 @@ flowchart LR
 
 ## Status
 
-`bas` is unreleased, and it isn't ready for production use. The current checks pass on Linux, macOS, and Windows with the D-Bus credential store. The checks include a build with Rust 1.89, the offline CLI checks, and checks of the extracted release executables. The compatibility check between the earlier zbus credential store and the D-Bus store also passed. The earlier checks of protected storage, pairing, grants, and the live service ran before the switch to the D-Bus store. The dependency update on 2026-11-04 has passed the checks only on Linux x86_64 so far.
+`bas` is at its first release, v0.1.0, and it isn't ready for production use. The current checks pass on Linux, macOS, and Windows with the D-Bus credential store. The checks include a build with Rust 1.89, the offline CLI checks, and checks of the extracted release executables. The compatibility check between the earlier zbus credential store and the D-Bus store also passed. The earlier checks of protected storage, pairing, grants, and the live service ran before the switch to the D-Bus store. The v0.1.0 release build passed the checks on all three platforms.
 
 The `bas` source is MIT. `cargo deny check licenses` still fails, because `deny.toml` doesn't list any allowed licenses.
 
-The GitHub workflows run only when someone starts them by hand. The `build artifacts` workflow in `release.yml` calls the `ci` workflow in `ci.yml`. No workflow publishes a release, and no workflow receives live vault credentials.
+The `ci` workflow in `ci.yml` runs on demand, and the `release` workflow in `release.yml` runs it on every `v*` tag and publishes the archives as a GitHub release. No workflow receives live vault credentials.
 
 ## Install from a release
 
