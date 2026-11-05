@@ -36,6 +36,8 @@ pub struct App {
     pub clipboard: Option<Clipboard>,
     /// The value this app last copied, until it is cleared.
     pub copied: Option<Copied>,
+    /// Source of request numbers, which tie each network result to the screen that asked.
+    next_request: u64,
 }
 
 /// One screen of the stack.
@@ -79,8 +81,8 @@ impl SecretsScreen {
 
 /// One secret, value and note hidden until revealed.
 pub struct SecretScreen {
-    /// The secret this screen shows. Read results for any other ID are ignored.
-    pub id: Uuid,
+    /// The read this screen waits for. Results of any other read are ignored.
+    pub request: u64,
     /// `None` while the read is in flight.
     pub detail: Option<Secret>,
     pub revealed: bool,
@@ -91,7 +93,7 @@ pub struct SecretScreen {
 impl fmt::Debug for SecretScreen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SecretScreen")
-            .field("id", &self.id)
+            .field("secret", &self.detail.as_ref().map(Secret::id))
             .field("revealed", &self.revealed)
             .finish_non_exhaustive()
     }
@@ -145,7 +147,8 @@ pub struct SecretForm {
     /// Keys type into the focused field. Otherwise keys move, reveal, and save.
     pub typing: bool,
     pub revealed: bool,
-    pub saving: bool,
+    /// The save in flight, if any. Its result applies only to this form.
+    pub saving: Option<u64>,
 }
 
 impl fmt::Debug for SecretForm {
@@ -250,6 +253,7 @@ impl App {
             status: Status::Info("Connecting to Secrets Manager".to_owned()),
             clipboard: Clipboard::new().ok(),
             copied: None,
+            next_request: 0,
         }
     }
 
@@ -294,30 +298,48 @@ impl App {
                 result,
                 done,
             } => self.on_secrets(project, result, done),
-            AppEvent::Secret { id, result } => self.on_secret(id, result),
-            AppEvent::SecretSaved(result) => self.on_secret_saved(result),
+            AppEvent::Secret { request, result } => self.on_secret(request, result),
+            AppEvent::SecretSaved { form, result } => self.on_secret_saved(form, result),
             AppEvent::WriteFailed {
                 action,
                 error,
                 outcome,
-            } => self.on_write_failed(&action, &error, outcome),
+                form,
+            } => self.on_write_failed(&action, &error, outcome, form),
             AppEvent::Quit => self.running = false,
         }
         Ok(())
     }
 
-    fn on_write_failed(&mut self, action: &str, error: &color_eyre::Report, outcome: WriteOutcome) {
+    /// Whether the top screen is the form that started save `request`.
+    fn is_saving_form(&self, request: Option<u64>) -> bool {
+        matches!(self.screens.last(), Some(Screen::Form(form)) if request.is_some() && form.saving == request)
+    }
+
+    fn request(&mut self) -> u64 {
+        self.next_request += 1;
+        self.next_request
+    }
+
+    fn on_write_failed(
+        &mut self,
+        action: &str,
+        error: &color_eyre::Report,
+        outcome: WriteOutcome,
+        form: Option<u64>,
+    ) {
+        let from_top_form = self.is_saving_form(form);
         match outcome {
             WriteOutcome::Refused => {
-                if let Some(Screen::Form(form)) = self.screens.last_mut() {
-                    form.saving = false;
+                if from_top_form && let Some(Screen::Form(form)) = self.screens.last_mut() {
+                    form.saving = None;
                 }
                 self.status = Status::Error(format!("Could not {action}: {error}"));
             }
             WriteOutcome::Unknown => {
                 // The server may have applied the write, so a retry could repeat it. Show
                 // what the server holds now instead of offering the same form again.
-                if matches!(self.screens.last(), Some(Screen::Form(_))) {
+                if from_top_form {
                     self.screens.pop();
                 }
                 self.status = Status::Error(format!(
@@ -344,7 +366,7 @@ impl App {
             .collect();
         self.load_projects(session);
         for project in listings {
-            self.load_secrets(session, project);
+            self.load_secrets(session, project, None);
         }
     }
 
@@ -372,10 +394,12 @@ impl App {
                 return;
             }
         };
-        self.status = Status::Info(done.unwrap_or_else(|| match projects.len() {
-            1 => "1 project".to_owned(),
-            count => format!("{count} projects"),
-        }));
+        if done.is_some() || !matches!(self.status, Status::Error(_)) {
+            self.status = Status::Info(done.unwrap_or_else(|| match projects.len() {
+                1 => "1 project".to_owned(),
+                count => format!("{count} projects"),
+            }));
+        }
         let row_count = projects.len() + 1;
         let selected_row = select
             .and_then(|id| projects.iter().position(|project| project.id() == id))
@@ -402,10 +426,12 @@ impl App {
                 return;
             }
         };
-        self.status = Status::Info(done.unwrap_or_else(|| match items.len() {
-            1 => "1 secret".to_owned(),
-            count => format!("{count} secrets"),
-        }));
+        if done.is_some() || !matches!(self.status, Status::Error(_)) {
+            self.status = Status::Info(done.unwrap_or_else(|| match items.len() {
+                1 => "1 secret".to_owned(),
+                count => format!("{count} secrets"),
+            }));
+        }
         for screen in &mut self.screens {
             if let Screen::Secrets(list) = screen
                 && list.project == project
@@ -417,11 +443,11 @@ impl App {
         }
     }
 
-    fn on_secret(&mut self, id: Uuid, result: color_eyre::Result<Secret>) {
+    fn on_secret(&mut self, request: u64, result: color_eyre::Result<Secret>) {
         let Some(Screen::Secret(screen)) = self.screens.last_mut() else {
             return;
         };
-        if screen.id != id {
+        if screen.request != request {
             return;
         }
         match result {
@@ -444,10 +470,11 @@ impl App {
         }
     }
 
-    fn on_secret_saved(&mut self, result: color_eyre::Result<Secret>) {
-        if matches!(self.screens.last(), Some(Screen::Form(_))) {
-            self.screens.pop();
+    fn on_secret_saved(&mut self, form: u64, result: color_eyre::Result<Secret>) {
+        if !self.is_saving_form(Some(form)) {
+            return;
         }
+        self.screens.pop();
         let detail = match result {
             Ok(detail) => detail,
             Err(err) => {
@@ -456,17 +483,17 @@ impl App {
                 return;
             }
         };
-        self.status = Status::Info(format!(
-            "Saved {}. Showing what the server returned",
-            detail.key()
-        ));
+        let saved = format!("Saved {}. Showing what the server returned", detail.key());
+        self.status = Status::Info(saved.clone());
+        let request = self.request();
         match self.screens.last_mut() {
             Some(Screen::Secret(screen)) => {
+                screen.request = request;
                 screen.detail = Some(detail);
                 screen.revealed = false;
             }
             _ => self.screens.push(Screen::Secret(SecretScreen {
-                id: detail.id(),
+                request,
                 detail: Some(detail),
                 revealed: false,
                 edit_on_load: false,
@@ -475,7 +502,7 @@ impl App {
         if let Some(session) = self.session.clone() {
             for screen in &self.screens {
                 if let Screen::Secrets(list) = screen {
-                    self.load_secrets(&session, list.project);
+                    self.load_secrets(&session, list.project, Some(saved.clone()));
                 }
             }
         }
@@ -589,7 +616,7 @@ impl App {
                     filter: String::new(),
                     filtering: false,
                 }));
-                self.load_secrets(&session, project);
+                self.load_secrets(&session, project, None);
             }
             KeyCode::Char('n') => {
                 self.modal = Some(Modal::ProjectName {
@@ -710,8 +737,9 @@ impl App {
         let Some(session) = self.connected() else {
             return;
         };
+        let request = self.request();
         self.screens.push(Screen::Secret(SecretScreen {
-            id,
+            request,
             detail: None,
             revealed: false,
             edit_on_load,
@@ -719,7 +747,7 @@ impl App {
         self.status = Status::Info("Reading the secret".to_owned());
         self.events.spawn(async move {
             AppEvent::Secret {
-                id,
+                request,
                 result: read_secret(&session, id).await,
             }
         });
@@ -747,7 +775,7 @@ impl App {
             focus: Field::Key,
             typing: true,
             revealed: false,
-            saving: false,
+            saving: None,
         }));
     }
 
@@ -756,7 +784,7 @@ impl App {
         let Some(Screen::Form(form)) = self.screens.last_mut() else {
             return;
         };
-        if form.saving {
+        if form.saving.is_some() {
             return;
         }
         let ctrl = key.modifiers == KeyModifiers::CONTROL;
@@ -818,6 +846,7 @@ impl App {
         let Some(session) = self.connected() else {
             return;
         };
+        let request = self.request();
         let Some(Screen::Form(form)) = self.screens.last_mut() else {
             return;
         };
@@ -833,7 +862,7 @@ impl App {
         let value = SecretText::new(form.value.expose().to_owned());
         let note = SecretText::new(form.note.expose().to_owned());
         let keep_projects = form.original_project == Some(project);
-        form.saving = true;
+        form.saving = Some(request);
         self.status = Status::Info(format!("Saving {key}"));
         let editing = form.editing;
         self.events.spawn(async move {
@@ -846,6 +875,7 @@ impl App {
                             action,
                             error,
                             outcome: WriteOutcome::Refused,
+                            form: Some(request),
                         };
                     }
                 },
@@ -862,8 +892,11 @@ impl App {
                 None => session.create(&write).await,
             };
             match written {
-                Ok(stored) => AppEvent::SecretSaved(read_secret(&session, stored.id()).await),
-                Err(failure) => write_failed(action, failure),
+                Ok(stored) => AppEvent::SecretSaved {
+                    form: request,
+                    result: read_secret(&session, stored.id()).await,
+                },
+                Err(failure) => write_failed(action, failure, Some(request)),
             }
         });
     }
@@ -938,7 +971,7 @@ impl App {
                         stored.name()
                     )),
                 },
-                Err(failure) => write_failed(action, failure),
+                Err(failure) => write_failed(action, failure, None),
             }
         });
     }
@@ -961,7 +994,7 @@ impl App {
                             result: list_secrets(&session, listing).await,
                             done: Some(format!("Moved {key} to trash. Restore it at {trash}")),
                         },
-                        Err(failure) => write_failed(format!("delete {key}"), failure),
+                        Err(failure) => write_failed(format!("delete {key}"), failure, None),
                     }
                 });
             }
@@ -974,7 +1007,9 @@ impl App {
                             select: None,
                             done: Some(format!("Deleted project {name}")),
                         },
-                        Err(failure) => write_failed(format!("delete project {name}"), failure),
+                        Err(failure) => {
+                            write_failed(format!("delete project {name}"), failure, None)
+                        }
                     }
                 });
             }
@@ -992,13 +1027,14 @@ impl App {
         });
     }
 
-    fn load_secrets(&self, session: &Session, project: Option<Uuid>) {
+    /// Re-reads one secrets list. `done` replaces the count on the status line.
+    fn load_secrets(&self, session: &Session, project: Option<Uuid>, done: Option<String>) {
         let session = session.clone();
         self.events.spawn(async move {
             AppEvent::Secrets {
                 project,
                 result: list_secrets(&session, project).await,
-                done: None,
+                done,
             }
         });
     }
@@ -1094,8 +1130,9 @@ async fn current_project_ids(session: &Session, id: Uuid) -> color_eyre::Result<
         .ok_or_else(|| color_eyre::eyre::eyre!("could not confirm the secret's current projects"))
 }
 
-/// The event for a failed write. Only a refusal is known to have changed nothing.
-fn write_failed(action: String, failure: Failure) -> AppEvent {
+/// The event for a failed write. Only a refusal is known to have changed nothing. `form` is
+/// the save request of the secret form that started the write.
+fn write_failed(action: String, failure: Failure, form: Option<u64>) -> AppEvent {
     let outcome = if failure.is_rejection() {
         WriteOutcome::Refused
     } else {
@@ -1105,6 +1142,7 @@ fn write_failed(action: String, failure: Failure) -> AppEvent {
         action,
         error: failure.into(),
         outcome,
+        form,
     }
 }
 
@@ -1125,7 +1163,7 @@ fn edit_form(detail: &Secret) -> SecretForm {
         focus: Field::Key,
         typing: false,
         revealed: false,
-        saving: false,
+        saving: None,
     }
 }
 

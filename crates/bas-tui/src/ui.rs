@@ -161,7 +161,7 @@ impl App {
     }
 
     fn render_form(&self, form: &SecretForm, area: Rect, buf: &mut Buffer) {
-        let title = if form.saving {
+        let title = if form.saving.is_some() {
             format!("{} (saving)", self.title())
         } else {
             self.title()

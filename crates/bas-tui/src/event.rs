@@ -44,16 +44,21 @@ pub enum AppEvent {
     },
     /// One secret was read.
     Secret {
-        id: Uuid,
+        request: u64,
         result: color_eyre::Result<Secret>,
     },
-    /// A create or update finished and the secret was read back from the server.
-    SecretSaved(color_eyre::Result<Secret>),
+    /// A create or update from form save `form` finished and the secret was read back.
+    SecretSaved {
+        form: u64,
+        result: color_eyre::Result<Secret>,
+    },
     /// A write was refused or failed. `action` completes "Could not ...".
     WriteFailed {
         action: String,
         error: color_eyre::Report,
         outcome: WriteOutcome,
+        /// The save request of the secret form that started the write, if one did.
+        form: Option<u64>,
     },
     /// Leave the application.
     Quit,
