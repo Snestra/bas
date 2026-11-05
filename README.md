@@ -28,6 +28,10 @@ The repository has no release license, and the permissions to distribute the Bit
 
 The GitHub workflows run only when someone starts them by hand. The `build artifacts` workflow in `release.yml` calls the `ci` workflow in `ci.yml`. No workflow publishes a release, and no workflow receives live vault credentials.
 
+## Install from a release
+
+Each [GitHub release](https://github.com/bjoernaagaard/bitwarden-agent-secrets/releases) publishes `bas-<OS>-<ARCH>.tar.gz` archives built by the `release` workflow on Linux, macOS, and Windows runners. Download the archive for your platform, extract `bas` (or `bas.exe`), and put it on your `PATH`. The archive contains only the executable and this README.
+
 ## Build and install
 
 You can build `bas` from a checkout with Rust 1.89 or newer and the native build tools for your platform. The Agent Access crates come from a pinned Git revision, so the first build needs access to the `bitwarden/agent-access` GitHub repository and to crates.io.
