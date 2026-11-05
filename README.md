@@ -22,7 +22,7 @@ flowchart LR
 
 ## Status
 
-`bas` is at its first release, v0.1.0, and it isn't ready for production use. The current checks pass on Linux, macOS, and Windows with the D-Bus credential store. The checks include a build with Rust 1.89, the offline CLI checks, and checks of the extracted release executables. The compatibility check between the earlier zbus credential store and the D-Bus store also passed. The earlier checks of protected storage, pairing, grants, and the live service ran before the switch to the D-Bus store. The v0.1.0 release build passed the checks on all three platforms.
+`bas` is at its first release, v0.1.0, and it isn't ready for production use. The current checks pass on Linux, macOS, and Windows with the D-Bus credential store. The checks include a build with Rust 1.89, the offline CLI checks, and checks of the extracted release executables. The compatibility check between the earlier zbus credential store and the D-Bus store also passed. The earlier checks of protected storage, pairing, grants, and the live service ran before the switch to the D-Bus store. The v0.1.0 release build passed the stable-toolchain checks on Linux, macOS, and Windows. The Rust 1.89 minimum-toolchain job runs on Linux only.
 
 The `bas` source is MIT. `cargo deny check licenses` still fails, because `deny.toml` doesn't list any allowed licenses.
 
