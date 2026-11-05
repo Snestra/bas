@@ -24,7 +24,7 @@ flowchart LR
 
 `bas` is unreleased, and it isn't ready for production use. The current checks pass on Linux, macOS, and Windows with the D-Bus credential store. The checks include a build with Rust 1.89, the offline CLI checks, and checks of the extracted release executables. The compatibility check between the earlier zbus credential store and the D-Bus store also passed. The earlier checks of protected storage, pairing, grants, and the live service ran before the switch to the D-Bus store. The dependency update on 2026-11-04 has passed the checks only on Linux x86_64 so far.
 
-The repository has no release license, and the permissions to distribute the Bitwarden SDK still need review. `cargo deny check licenses` also fails, because `deny.toml` doesn't list any allowed licenses. Don't publish packages or binaries on the basis of the README.
+The `bas` source is MIT. `cargo deny check licenses` still fails, because `deny.toml` doesn't list any allowed licenses.
 
 The GitHub workflows run only when someone starts them by hand. The `build artifacts` workflow in `release.yml` calls the `ci` workflow in `ci.yml`. No workflow publishes a release, and no workflow receives live vault credentials.
 

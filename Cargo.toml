@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Bitwarden Agent Secrets: reference-based Secrets Manager access for coding agents"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [dependencies]
