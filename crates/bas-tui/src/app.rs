@@ -1,17 +1,18 @@
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
-use color_eyre::eyre::eyre;
+use bas_core::credential::{MachineToken, SecretText};
+use bas_core::profile::Profile;
+use bas_core::secrets::{Identifier, Project, Secret, Session, WriteRequest};
+use bas_core::{Uuid, Zeroizing};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
-use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::event::{AppEvent, Event, EventHandler};
-use crate::vault::{
-    Connection, Project, SecretDetail, SecretDraft, SecretListing, SecretValue, Vault, VaultError,
-    web_vault_base,
-};
+
+/// User agent sent with every Secrets Manager request.
+const USER_AGENT: &str = concat!("bas-tui/", env!("CARGO_PKG_VERSION"));
 
 /// How long a copied value stays on the clipboard before it is cleared.
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
@@ -24,7 +25,7 @@ pub struct App {
     pub vault_base: String,
     pub organization: Uuid,
     /// The session, once login has finished.
-    pub vault: Option<Vault>,
+    pub session: Option<Session>,
     /// Projects the machine account can read, sorted by name.
     pub projects: Vec<Project>,
     /// Open screens. The first is always [`Screen::Projects`]; the last is shown.
@@ -53,7 +54,7 @@ pub enum Screen {
 pub struct SecretsScreen {
     pub project: Option<Uuid>,
     /// `None` until the first listing arrives.
-    pub items: Option<Vec<SecretListing>>,
+    pub items: Option<Vec<Identifier>>,
     /// Index into [`SecretsScreen::visible`].
     pub selected: usize,
     pub filter: String,
@@ -62,16 +63,16 @@ pub struct SecretsScreen {
 
 impl SecretsScreen {
     /// Listings whose key contains the filter, ignoring case.
-    pub fn visible(&self) -> Vec<&SecretListing> {
+    pub fn visible(&self) -> Vec<&Identifier> {
         let needle = self.filter.to_lowercase();
         self.items
             .iter()
             .flatten()
-            .filter(|item| item.key.to_lowercase().contains(&needle))
+            .filter(|item| item.key().to_lowercase().contains(&needle))
             .collect()
     }
 
-    fn selected_item(&self) -> Option<&SecretListing> {
+    fn selected_item(&self) -> Option<&Identifier> {
         self.visible().get(self.selected).copied()
     }
 }
@@ -79,10 +80,19 @@ impl SecretsScreen {
 /// One secret, value and note hidden until revealed.
 pub struct SecretScreen {
     /// `None` while the read is in flight.
-    pub detail: Option<SecretDetail>,
+    pub detail: Option<Secret>,
     pub revealed: bool,
     /// Open the edit form as soon as the read arrives.
     pub edit_on_load: bool,
+}
+
+impl fmt::Debug for SecretScreen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretScreen")
+            .field("secret", &self.detail.as_ref().map(Secret::id))
+            .field("revealed", &self.revealed)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Fields of the secret form, in tab order.
@@ -121,8 +131,8 @@ pub struct SecretForm {
     /// The secret being edited, or `None` for a new one.
     pub editing: Option<Uuid>,
     pub key: String,
-    pub value: SecretValue,
-    pub note: SecretValue,
+    pub value: SecretText,
+    pub note: SecretText,
     /// Index into [`App::projects`].
     pub project: usize,
     pub focus: Field,
@@ -130,6 +140,17 @@ pub struct SecretForm {
     pub typing: bool,
     pub revealed: bool,
     pub saving: bool,
+}
+
+impl fmt::Debug for SecretForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretForm")
+            .field("editing", &self.editing)
+            .field("key", &self.key)
+            .field("project", &self.project)
+            .field("focus", &self.focus)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A dialog drawn over the current screen.
@@ -183,19 +204,33 @@ pub struct Copied {
     pub deadline: Instant,
 }
 
+impl fmt::Debug for Copied {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Copied")
+            .field("deadline", &self.deadline)
+            .finish_non_exhaustive()
+    }
+}
+
 impl App {
-    /// Builds the app and starts logging in off the UI loop.
-    pub fn new(connection: Connection) -> Self {
-        let vault_base = web_vault_base(&connection.api_url);
-        let organization = connection.organization;
+    /// Builds the app and starts signing in to the profile off the UI loop.
+    pub fn new(profile: Profile, token: MachineToken) -> Self {
+        let vault_base = web_vault_base(profile.endpoints.api());
+        let organization = profile.organization;
         let events = EventHandler::new();
-        events.spawn(async move { AppEvent::Connected(Vault::connect(connection).await) });
+        events.spawn(async move {
+            AppEvent::Connected(Box::new(
+                Session::open(&profile, &token, USER_AGENT)
+                    .await
+                    .map_err(color_eyre::Report::new),
+            ))
+        });
         Self {
             running: true,
             events,
             vault_base,
             organization,
-            vault: None,
+            session: None,
             projects: Vec::new(),
             screens: vec![Screen::Projects { selected: 0 }],
             modal: None,
@@ -235,14 +270,7 @@ impl App {
 
     fn handle_app_event(&mut self, event: AppEvent) -> color_eyre::Result<()> {
         match event {
-            AppEvent::Connected(Ok(vault)) => {
-                self.status = Status::Info("Connected. Loading projects".to_owned());
-                self.load_projects(&vault);
-                self.vault = Some(vault);
-            }
-            AppEvent::Connected(Err(err)) => {
-                return Err(eyre!("could not connect to Secrets Manager: {err}"));
-            }
+            AppEvent::Connected(result) => self.on_connected(*result)?,
             AppEvent::Projects {
                 result,
                 select,
@@ -266,9 +294,17 @@ impl App {
         Ok(())
     }
 
+    fn on_connected(&mut self, result: color_eyre::Result<Session>) -> color_eyre::Result<()> {
+        let session = result.map_err(|err| err.wrap_err("could not connect to Secrets Manager"))?;
+        self.status = Status::Info("Connected. Loading projects".to_owned());
+        self.load_projects(&session);
+        self.session = Some(session);
+        Ok(())
+    }
+
     fn on_projects(
         &mut self,
-        result: Result<Vec<Project>, VaultError>,
+        result: color_eyre::Result<Vec<Project>>,
         select: Option<Uuid>,
         done: Option<String>,
     ) {
@@ -285,7 +321,7 @@ impl App {
         }));
         let row_count = projects.len() + 1;
         let selected_row = select
-            .and_then(|id| projects.iter().position(|project| project.id == id))
+            .and_then(|id| projects.iter().position(|project| project.id() == id))
             .map(|index| index + 1);
         self.projects = projects;
         if let Some(Screen::Projects { selected }) = self.screens.first_mut() {
@@ -296,7 +332,7 @@ impl App {
     fn on_secrets(
         &mut self,
         project: Option<Uuid>,
-        result: Result<Vec<SecretListing>, VaultError>,
+        result: color_eyre::Result<Vec<Identifier>>,
         done: Option<String>,
     ) {
         let items = match result {
@@ -321,7 +357,7 @@ impl App {
         }
     }
 
-    fn on_secret(&mut self, result: Result<SecretDetail, VaultError>) {
+    fn on_secret(&mut self, result: color_eyre::Result<Secret>) {
         let Some(Screen::Secret(screen)) = self.screens.last_mut() else {
             return;
         };
@@ -329,7 +365,7 @@ impl App {
             Ok(detail) => {
                 let edit = screen.edit_on_load;
                 screen.edit_on_load = false;
-                self.status = Status::Info(format!("Read {}", detail.key));
+                self.status = Status::Info(format!("Read {}", detail.key()));
                 if edit {
                     let form = edit_form(&self.projects, &detail);
                     screen.detail = Some(detail);
@@ -345,7 +381,7 @@ impl App {
         }
     }
 
-    fn on_secret_saved(&mut self, result: Result<SecretDetail, VaultError>) {
+    fn on_secret_saved(&mut self, result: color_eyre::Result<Secret>) {
         if matches!(self.screens.last(), Some(Screen::Form(_))) {
             self.screens.pop();
         }
@@ -359,7 +395,7 @@ impl App {
         };
         self.status = Status::Info(format!(
             "Saved {}. Showing what the server returned",
-            detail.key
+            detail.key()
         ));
         match self.screens.last_mut() {
             Some(Screen::Secret(screen)) => {
@@ -372,10 +408,10 @@ impl App {
                 edit_on_load: false,
             })),
         }
-        if let Some(vault) = self.vault.clone() {
+        if let Some(session) = self.session.clone() {
             for screen in &self.screens {
                 if let Screen::Secrets(list) = screen {
-                    self.load_secrets(&vault, list.project);
+                    self.load_secrets(&session, list.project);
                 }
             }
         }
@@ -462,26 +498,26 @@ impl App {
     /// The project in view: the open secrets list's project, else the highlighted project.
     pub fn context_project(&self) -> Option<&Project> {
         match self.open_listing() {
-            Some(Some(id)) => self.projects.iter().find(|project| project.id == id),
+            Some(Some(id)) => self.projects.iter().find(|project| project.id() == id),
             Some(None) => None,
             None => self.selected_project(),
         }
     }
 
-    fn connected(&mut self) -> Option<Vault> {
-        if self.vault.is_none() {
+    fn connected(&mut self) -> Option<Session> {
+        if self.session.is_none() {
             self.status = Status::Info("Still connecting to Secrets Manager".to_owned());
         }
-        self.vault.clone()
+        self.session.clone()
     }
 
     fn handle_projects_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
-                let Some(vault) = self.connected() else {
+                let Some(session) = self.connected() else {
                     return;
                 };
-                let project = self.selected_project().map(|project| project.id);
+                let project = self.selected_project().map(Project::id);
                 self.screens.push(Screen::Secrets(SecretsScreen {
                     project,
                     items: None,
@@ -489,7 +525,7 @@ impl App {
                     filter: String::new(),
                     filtering: false,
                 }));
-                self.load_secrets(&vault, project);
+                self.load_secrets(&session, project);
             }
             KeyCode::Char('n') => {
                 self.modal = Some(Modal::ProjectName {
@@ -500,8 +536,8 @@ impl App {
             KeyCode::Char('e') => {
                 if let Some(project) = self.selected_project() {
                     self.modal = Some(Modal::ProjectName {
-                        renaming: Some(project.id),
-                        input: project.name.clone(),
+                        renaming: Some(project.id()),
+                        input: project.name().to_owned(),
                     });
                 }
             }
@@ -509,8 +545,8 @@ impl App {
                 if let Some(project) = self.selected_project() {
                     self.modal = Some(Modal::Delete {
                         target: DeleteTarget::Project {
-                            id: project.id,
-                            name: project.name.clone(),
+                            id: project.id(),
+                            name: project.name().to_owned(),
                         },
                         typed: String::new(),
                     });
@@ -525,7 +561,9 @@ impl App {
             return;
         };
         let listing = list.project;
-        let selected = list.selected_item().map(|item| (item.id, item.key.clone()));
+        let selected = list
+            .selected_item()
+            .map(|item| (item.id(), item.key().to_owned()));
         match key.code {
             KeyCode::Char('/') => list.filtering = true,
             KeyCode::Enter => {
@@ -581,8 +619,8 @@ impl App {
         match key.code {
             KeyCode::Char('r') => screen.revealed = !screen.revealed,
             KeyCode::Char('c') => {
-                let key_name = detail.key.clone();
-                let text = Zeroizing::new(detail.value.expose().to_owned());
+                let key_name = detail.key().to_owned();
+                let text = Zeroizing::new(detail.value().expose().to_owned());
                 self.copy(&key_name, text);
             }
             KeyCode::Char('e') => {
@@ -591,8 +629,8 @@ impl App {
             }
             KeyCode::Char('d') => {
                 let target = DeleteTarget::Secret {
-                    id: detail.id,
-                    key: detail.key.clone(),
+                    id: detail.id(),
+                    key: detail.key().to_owned(),
                     listing,
                 };
                 self.modal = Some(Modal::Delete {
@@ -605,7 +643,7 @@ impl App {
     }
 
     fn open_secret(&mut self, id: Uuid, edit_on_load: bool) {
-        let Some(vault) = self.connected() else {
+        let Some(session) = self.connected() else {
             return;
         };
         self.screens.push(Screen::Secret(SecretScreen {
@@ -615,7 +653,7 @@ impl App {
         }));
         self.status = Status::Info("Reading the secret".to_owned());
         self.events
-            .spawn(async move { AppEvent::Secret(vault.get_secret(id).await) });
+            .spawn(async move { AppEvent::Secret(read_secret(&session, id).await) });
     }
 
     fn open_new_form(&mut self) {
@@ -628,13 +666,13 @@ impl App {
         }
         let project = self
             .context_project()
-            .and_then(|current| self.projects.iter().position(|p| p.id == current.id))
+            .and_then(|current| self.projects.iter().position(|p| p.id() == current.id()))
             .unwrap_or(0);
         self.screens.push(Screen::Form(SecretForm {
             editing: None,
             key: String::new(),
-            value: SecretValue::default(),
-            note: SecretValue::default(),
+            value: SecretText::default(),
+            note: SecretText::default(),
             project,
             focus: Field::Key,
             typing: true,
@@ -707,7 +745,7 @@ impl App {
     }
 
     fn save_form(&mut self) {
-        let Some(vault) = self.connected() else {
+        let Some(session) = self.connected() else {
             return;
         };
         let Some(Screen::Form(form)) = self.screens.last_mut() else {
@@ -717,24 +755,31 @@ impl App {
             self.status = Status::Error("Pick a project for the secret".to_owned());
             return;
         };
-        let draft = SecretDraft {
-            key: form.key.trim().to_owned(),
-            value: form.value.clone(),
-            note: form.note.clone(),
-            project_id: project.id,
-        };
+        let key = form.key.trim().to_owned();
+        // The form keeps its text so a refused save can be corrected and retried.
+        let value = SecretText::new(form.value.expose().to_owned());
+        let note = SecretText::new(form.note.expose().to_owned());
+        let project_ids = [project.id()];
         form.saving = true;
-        self.status = Status::Info(format!("Saving {}", draft.key));
+        self.status = Status::Info(format!("Saving {key}"));
         let editing = form.editing;
         self.events.spawn(async move {
-            let action = format!("save {}", draft.key);
+            let write = WriteRequest {
+                key: &key,
+                value: &value,
+                note: &note,
+                project_ids: &project_ids,
+            };
             let written = match editing {
-                Some(id) => vault.update_secret(id, &draft).await,
-                None => vault.create_secret(&draft).await,
+                Some(id) => session.update(id, &write).await,
+                None => session.create(&write).await,
             };
             match written {
-                Ok(stored) => AppEvent::SecretSaved(vault.get_secret(stored.id).await),
-                Err(error) => AppEvent::WriteFailed { action, error },
+                Ok(stored) => AppEvent::SecretSaved(read_secret(&session, stored.id()).await),
+                Err(error) => AppEvent::WriteFailed {
+                    action: format!("save {key}"),
+                    error: error.into(),
+                },
             }
         });
     }
@@ -785,7 +830,7 @@ impl App {
     }
 
     fn write_project(&mut self, renaming: Option<Uuid>, name: String) {
-        let Some(vault) = self.connected() else {
+        let Some(session) = self.connected() else {
             return;
         };
         self.status = Status::Info(format!("Saving project {name}"));
@@ -793,29 +838,32 @@ impl App {
             let (action, written) = match renaming {
                 Some(id) => (
                     format!("rename the project to {name}"),
-                    vault.rename_project(id, &name).await,
+                    session.rename_project(id, &name).await,
                 ),
                 None => (
                     format!("create project {name}"),
-                    vault.create_project(&name).await,
+                    session.create_project(&name).await,
                 ),
             };
             match written {
                 Ok(stored) => AppEvent::Projects {
-                    result: vault.list_projects().await,
-                    select: Some(stored.id),
+                    result: list_projects(&session).await,
+                    select: Some(stored.id()),
                     done: Some(format!(
                         "Server saved project {}. List re-read from the server",
-                        stored.name
+                        stored.name()
                     )),
                 },
-                Err(error) => AppEvent::WriteFailed { action, error },
+                Err(error) => AppEvent::WriteFailed {
+                    action,
+                    error: error.into(),
+                },
             }
         });
     }
 
     fn delete(&mut self, target: DeleteTarget) {
-        let Some(vault) = self.connected() else {
+        let Some(session) = self.connected() else {
             return;
         };
         match target {
@@ -826,15 +874,15 @@ impl App {
                 self.status = Status::Info(format!("Deleting {key}"));
                 let trash = self.trash_url();
                 self.events.spawn(async move {
-                    match vault.delete_secret(id).await {
+                    match session.delete(id).await {
                         Ok(()) => AppEvent::Secrets {
                             project: listing,
-                            result: vault.list_secrets(listing).await,
+                            result: list_secrets(&session, listing).await,
                             done: Some(format!("Moved {key} to trash. Restore it at {trash}")),
                         },
                         Err(error) => AppEvent::WriteFailed {
                             action: format!("delete {key}"),
-                            error,
+                            error: error.into(),
                         },
                     }
                 });
@@ -842,15 +890,15 @@ impl App {
             DeleteTarget::Project { id, name } => {
                 self.status = Status::Info(format!("Deleting project {name}"));
                 self.events.spawn(async move {
-                    match vault.delete_project(id).await {
+                    match session.delete_project(id).await {
                         Ok(()) => AppEvent::Projects {
-                            result: vault.list_projects().await,
+                            result: list_projects(&session).await,
                             select: None,
                             done: Some(format!("Deleted project {name}")),
                         },
                         Err(error) => AppEvent::WriteFailed {
                             action: format!("delete project {name}"),
-                            error,
+                            error: error.into(),
                         },
                     }
                 });
@@ -858,23 +906,23 @@ impl App {
         }
     }
 
-    fn load_projects(&self, vault: &Vault) {
-        let vault = vault.clone();
+    fn load_projects(&self, session: &Session) {
+        let session = session.clone();
         self.events.spawn(async move {
             AppEvent::Projects {
-                result: vault.list_projects().await,
+                result: list_projects(&session).await,
                 select: None,
                 done: None,
             }
         });
     }
 
-    fn load_secrets(&self, vault: &Vault, project: Option<Uuid>) {
-        let vault = vault.clone();
+    fn load_secrets(&self, session: &Session, project: Option<Uuid>) {
+        let session = session.clone();
         self.events.spawn(async move {
             AppEvent::Secrets {
                 project,
-                result: vault.list_secrets(project).await,
+                result: list_secrets(&session, project).await,
                 done: None,
             }
         });
@@ -930,17 +978,50 @@ impl App {
     }
 }
 
+/// The web vault origin that belongs to a Secrets Manager API URL.
+///
+/// The two Bitwarden cloud regions map to their vault hosts. A self-hosted server serves
+/// the vault at the API URL without its trailing `/api`.
+fn web_vault_base(api_url: &str) -> String {
+    match api_url {
+        "https://api.bitwarden.com" => "https://vault.bitwarden.com".to_owned(),
+        "https://api.bitwarden.eu" => "https://vault.bitwarden.eu".to_owned(),
+        other => other.strip_suffix("/api").unwrap_or(other).to_owned(),
+    }
+}
+
+/// Projects the machine account can read, sorted by name.
+async fn list_projects(session: &Session) -> color_eyre::Result<Vec<Project>> {
+    let mut projects = session.list_projects().await?;
+    projects.sort_by(|a, b| a.name().cmp(b.name()));
+    Ok(projects)
+}
+
+/// Secrets the machine account can read, in one project or all of them, sorted by key.
+async fn list_secrets(
+    session: &Session,
+    project: Option<Uuid>,
+) -> color_eyre::Result<Vec<Identifier>> {
+    let mut secrets = session.list_identifiers(project).await?;
+    secrets.sort_by(|a, b| a.key().cmp(b.key()));
+    Ok(secrets)
+}
+
+async fn read_secret(session: &Session, id: Uuid) -> color_eyre::Result<Secret> {
+    Ok(session.get(id).await?)
+}
+
 /// A form prefilled from a secret the server returned.
-fn edit_form(projects: &[Project], detail: &SecretDetail) -> SecretForm {
+fn edit_form(projects: &[Project], detail: &Secret) -> SecretForm {
     let project = detail
-        .project_id
-        .and_then(|id| projects.iter().position(|p| p.id == id))
+        .project_id()
+        .and_then(|id| projects.iter().position(|p| p.id() == id))
         .unwrap_or(0);
     SecretForm {
-        editing: Some(detail.id),
-        key: detail.key.clone(),
-        value: detail.value.clone(),
-        note: detail.note.clone(),
+        editing: Some(detail.id()),
+        key: detail.key().to_owned(),
+        value: SecretText::new(detail.value().expose().to_owned()),
+        note: SecretText::new(detail.note().expose().to_owned()),
         project,
         focus: Field::Key,
         typing: false,

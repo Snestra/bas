@@ -1,19 +1,18 @@
 use std::future::Future;
 use std::time::Duration;
 
+use bas_core::Uuid;
+use bas_core::secrets::{Identifier, Project, Secret, Session};
 use color_eyre::eyre::OptionExt;
 use crossterm::event::Event as CrosstermEvent;
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
-use uuid::Uuid;
-
-use crate::vault::{Project, SecretDetail, SecretListing, Vault, VaultError};
 
 /// How often tick events fire. Ticks drive the clipboard countdown.
 const TICK_FPS: f64 = 4.0;
 
 /// Everything the main loop reacts to.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Event {
     /// Emitted on a fixed schedule.
     Tick,
@@ -24,29 +23,34 @@ pub enum Event {
 }
 
 /// Results of network tasks, each sent once the server has answered.
-#[derive(Clone, Debug)]
+///
+/// Failures carry the app's one error type, with fixed wording from `bas-core`.
+#[derive(Debug)]
 pub enum AppEvent {
-    /// Login finished.
-    Connected(Result<Vault, VaultError>),
+    /// Login finished. Boxed because a signed-in session is much larger than the other events.
+    Connected(Box<color_eyre::Result<Session>>),
     /// A project listing arrived. When it follows a write, `select` names the project to
     /// highlight and `done` is the status line text.
     Projects {
-        result: Result<Vec<Project>, VaultError>,
+        result: color_eyre::Result<Vec<Project>>,
         select: Option<Uuid>,
         done: Option<String>,
     },
     /// A secret listing arrived for the given project, or for all projects.
     Secrets {
         project: Option<Uuid>,
-        result: Result<Vec<SecretListing>, VaultError>,
+        result: color_eyre::Result<Vec<Identifier>>,
         done: Option<String>,
     },
     /// One secret was read.
-    Secret(Result<SecretDetail, VaultError>),
+    Secret(color_eyre::Result<Secret>),
     /// A create or update finished and the secret was read back from the server.
-    SecretSaved(Result<SecretDetail, VaultError>),
+    SecretSaved(color_eyre::Result<Secret>),
     /// A write was refused or failed. `action` completes "Could not ...".
-    WriteFailed { action: String, error: VaultError },
+    WriteFailed {
+        action: String,
+        error: color_eyre::Report,
+    },
     /// Leave the application.
     Quit,
 }

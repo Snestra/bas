@@ -24,6 +24,7 @@ pub const AGENT_ACCESS_TOKEN_VAR: &str = "AAC_TOKEN";
 pub const BOOTSTRAP_CREDENTIAL_VARS: &[&str] = &[ACCESS_TOKEN_VAR, AGENT_ACCESS_TOKEN_VAR];
 
 /// Secret text whose memory is zeroed on drop and whose `Debug` output is redacted.
+#[derive(Default)]
 pub struct SecretText(Zeroizing<String>);
 
 impl SecretText {
@@ -43,6 +44,32 @@ impl SecretText {
     #[must_use]
     pub fn from_zeroizing(text: Zeroizing<String>) -> Self {
         Self(text)
+    }
+
+    /// Appends one typed character.
+    ///
+    /// The text is first moved into a buffer big enough for it, and the old buffer is
+    /// zeroed, so growing never leaves an unzeroed copy behind.
+    pub fn push(&mut self, ch: char) {
+        if self.0.len() + ch.len_utf8() > self.0.capacity() {
+            let mut grown = Zeroizing::new(String::with_capacity(
+                (self.0.len() + ch.len_utf8()).max(32) * 2,
+            ));
+            grown.push_str(&self.0);
+            self.0 = grown;
+        }
+        self.0.push(ch);
+    }
+
+    /// Removes the last character, if any.
+    pub fn pop(&mut self) {
+        self.0.pop();
+    }
+
+    /// Whether the text is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Hands the text on without an unzeroed copy.

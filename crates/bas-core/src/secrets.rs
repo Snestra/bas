@@ -5,9 +5,14 @@
 
 use std::fmt;
 
+use bitwarden::secrets_manager::projects::{
+    ProjectCreateRequest, ProjectPutRequest, ProjectResponse, ProjectsDeleteRequest,
+    ProjectsListRequest,
+};
 use bitwarden::secrets_manager::secrets::{
     SecretCreateRequest, SecretGetRequest, SecretIdentifiersByProjectRequest,
-    SecretIdentifiersRequest, SecretPutRequest, SecretResponse, SecretsGetRequest,
+    SecretIdentifiersRequest, SecretPutRequest, SecretResponse, SecretsDeleteRequest,
+    SecretsGetRequest,
 };
 use bitwarden::secrets_manager::{
     AccessTokenLoginRequest, ClientSettings, DeviceType, SecretsManagerClient,
@@ -33,6 +38,8 @@ pub enum Failure {
     Validation,
     /// The response arrived but could not be decoded or decrypted.
     Unprocessable,
+    /// The server answered a bulk delete but did not delete the requested item.
+    NotDeleted,
 }
 
 impl Failure {
@@ -84,12 +91,35 @@ impl Failure {
                 "could not reach Secrets Manager at {} to {operation}",
                 profile.endpoints.api()
             )),
+            Self::NotDeleted => Error::new(format!(
+                "Secrets Manager refused to {operation} for profile '{name}'"
+            )),
             Self::IdentityRejected | Self::Validation | Self::Unprocessable => Error::new(format!(
                 "could not {operation}: the Secrets Manager response was unusable"
             )),
         }
     }
 }
+
+impl fmt::Display for Failure {
+    /// Names the cause in fixed wording that never repeats a server body.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Status(401 | 403) => f.write_str("the machine account is not allowed to do this"),
+            Self::Status(404) => f.write_str("not found, or not visible to this machine account"),
+            Self::Status(status) => {
+                write!(f, "Secrets Manager refused the request (HTTP {status})")
+            }
+            Self::IdentityRejected => f.write_str("Secrets Manager refused the machine token"),
+            Self::Transport => f.write_str("could not reach Secrets Manager"),
+            Self::Validation => f.write_str("a field is empty, only whitespace, or too long"),
+            Self::Unprocessable => f.write_str("the Secrets Manager response could not be read"),
+            Self::NotDeleted => f.write_str("Secrets Manager answered but did not delete it"),
+        }
+    }
+}
+
+impl std::error::Error for Failure {}
 
 /// Secret metadata from the identifier listing, which carries no values.
 ///
@@ -208,6 +238,36 @@ impl fmt::Debug for Secret {
     }
 }
 
+/// A project visible to the machine account.
+///
+/// Only [`Session`] creates one, and only for the profile's organization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    id: Uuid,
+    name: String,
+}
+
+impl Project {
+    /// Project ID.
+    #[must_use]
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Project name. Names are not unique.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn from_response(response: ProjectResponse) -> Self {
+        Self {
+            id: response.id,
+            name: response.name,
+        }
+    }
+}
+
 /// Fields written by a create or full update. `Debug` shows only the key and projects.
 pub struct WriteRequest<'a> {
     /// Secret key (name).
@@ -231,7 +291,9 @@ impl fmt::Debug for WriteRequest<'_> {
 
 /// An authenticated SDK client confirmed to belong to the profile's organization.
 ///
-/// The SDK keeps its session in memory only; no state file is written.
+/// The SDK keeps its session in memory only; no state file is written. A clone shares the
+/// signed-in client, so concurrent tasks can each hold one.
+#[derive(Clone)]
 pub struct Session {
     client: SecretsManagerClient,
     profile: Profile,
@@ -314,6 +376,12 @@ impl Session {
             client,
             profile: profile.clone(),
         })
+    }
+
+    /// The profile this session signed in for.
+    #[must_use]
+    pub fn profile(&self) -> &Profile {
+        &self.profile
     }
 
     /// Lists secret identifiers visible to the machine account, optionally in one project.
@@ -419,6 +487,112 @@ impl Session {
         result
             .map(Secret::from_response)
             .map_err(|err| Failure::classify(&err))
+    }
+
+    /// Deletes one secret. The server moves it to the organization's trash, which only an
+    /// organization admin can empty or restore from.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure, or [`Failure::NotDeleted`] when the server answered
+    /// without deleting the secret.
+    pub async fn delete(&self, id: Uuid) -> Result<(), Failure> {
+        let response = self
+            .client
+            .secrets()
+            .delete(SecretsDeleteRequest { ids: vec![id] })
+            .await
+            .map_err(|err| Failure::classify(&err))?;
+        if response
+            .data
+            .iter()
+            .any(|item| item.id == id && item.error.is_none())
+        {
+            Ok(())
+        } else {
+            Err(Failure::NotDeleted)
+        }
+    }
+
+    /// Lists the projects the machine account can read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure.
+    pub async fn list_projects(&self) -> Result<Vec<Project>, Failure> {
+        let organization_id = self.profile.organization;
+        let response = self
+            .client
+            .projects()
+            .list(&ProjectsListRequest { organization_id })
+            .await
+            .map_err(|err| Failure::classify(&err))?;
+        Ok(response
+            .data
+            .into_iter()
+            .filter(|project| project.organization_id == organization_id)
+            .map(Project::from_response)
+            .collect())
+    }
+
+    /// Creates a project. The server gives the creating machine account read and write
+    /// access to it. Never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure.
+    pub async fn create_project(&self, name: &str) -> Result<Project, Failure> {
+        self.client
+            .projects()
+            .create(&ProjectCreateRequest {
+                organization_id: self.profile.organization,
+                name: name.to_owned(),
+            })
+            .await
+            .map(Project::from_response)
+            .map_err(|err| Failure::classify(&err))
+    }
+
+    /// Renames a project. Never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure.
+    pub async fn rename_project(&self, id: Uuid, name: &str) -> Result<Project, Failure> {
+        self.client
+            .projects()
+            .update(&ProjectPutRequest {
+                id,
+                organization_id: self.profile.organization,
+                name: name.to_owned(),
+            })
+            .await
+            .map(Project::from_response)
+            .map_err(|err| Failure::classify(&err))
+    }
+
+    /// Deletes one project. The server deletes it outright, because projects have no trash.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure, or [`Failure::NotDeleted`] when the server answered
+    /// without deleting the project.
+    pub async fn delete_project(&self, id: Uuid) -> Result<(), Failure> {
+        let response = self
+            .client
+            .projects()
+            .delete(ProjectsDeleteRequest { ids: vec![id] })
+            .await
+            .map_err(|err| Failure::classify(&err))?;
+        if response
+            .data
+            .iter()
+            .any(|item| item.id == id && item.error.is_none())
+        {
+            Ok(())
+        } else {
+            Err(Failure::NotDeleted)
+        }
     }
 
     /// Replaces a secret's key, value, note, and project. Never retried.

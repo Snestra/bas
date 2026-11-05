@@ -1,5 +1,8 @@
 use std::time::Instant;
 
+use bas_core::Uuid;
+use bas_core::credential::SecretText;
+use bas_core::secrets::Project;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -7,12 +10,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Widget, Wrap,
 };
-use uuid::Uuid;
 
 use crate::app::{
     App, DeleteTarget, Field, Modal, Screen, SecretForm, SecretScreen, SecretsScreen, Status,
 };
-use crate::vault::SecretValue;
 
 /// Shown in place of a hidden value. Fixed width, so it does not reveal the length.
 const HIDDEN: &str = "••••••••";
@@ -65,8 +66,8 @@ impl App {
     fn project_name(&self, id: Uuid) -> String {
         self.projects
             .iter()
-            .find(|project| project.id == id)
-            .map_or_else(|| id.to_string(), |project| project.name.clone())
+            .find(|project| project.id() == id)
+            .map_or_else(|| id.to_string(), |project| project.name().to_owned())
     }
 
     fn secrets_title(&self, list: &SecretsScreen) -> String {
@@ -78,7 +79,7 @@ impl App {
 
     fn render_projects(&self, selected: usize, area: Rect, buf: &mut Buffer) {
         let block = panel("Projects");
-        if self.vault.is_none() {
+        if self.session.is_none() {
             Paragraph::new("Connecting to Secrets Manager")
                 .block(block)
                 .render(area, buf);
@@ -87,7 +88,7 @@ impl App {
         let rows = std::iter::once(ListItem::new("All secrets".italic())).chain(
             self.projects
                 .iter()
-                .map(|project| ListItem::new(project.name.as_str())),
+                .map(|project| ListItem::new(project.name())),
         );
         render_list(rows, selected, block, area, buf);
     }
@@ -113,12 +114,12 @@ impl App {
         }
         let rows = visible.into_iter().map(|item| {
             let projects: Vec<String> = item
-                .project_ids
+                .project_ids()
                 .iter()
                 .map(|id| self.project_name(*id))
                 .collect();
             ListItem::new(Line::from(vec![
-                Span::raw(item.key.clone()),
+                Span::raw(item.key().to_owned()),
                 Span::raw(format!("  {}", projects.join(", "))).dim(),
             ]))
         });
@@ -133,7 +134,7 @@ impl App {
                 .render(area, buf);
             return;
         };
-        let shown = |value: &SecretValue| {
+        let shown = |value: &SecretText| {
             if screen.revealed {
                 value.expose().to_owned()
             } else {
@@ -141,19 +142,19 @@ impl App {
             }
         };
         let project = detail
-            .project_id
+            .project_id()
             .map_or_else(|| "none".to_owned(), |id| self.project_name(id));
         let mut lines = vec![
-            field_line("Key", &detail.key),
-            field_line("ID", &detail.id.to_string()),
+            field_line("Key", detail.key()),
+            field_line("ID", &detail.id().to_string()),
             field_line("Project", &project),
             Line::default(),
             "Value".bold().into(),
         ];
-        lines.extend(Text::from(shown(&detail.value)).lines);
+        lines.extend(Text::from(shown(detail.value())).lines);
         lines.push(Line::default());
         lines.push("Note".bold().into());
-        lines.extend(Text::from(shown(&detail.note)).lines);
+        lines.extend(Text::from(shown(detail.note())).lines);
         Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
@@ -166,17 +167,19 @@ impl App {
         } else {
             self.title()
         };
-        let masked = |value: &SecretValue| {
+        let masked = |value: &SecretText| {
             if form.revealed {
                 value.expose().to_owned()
+            } else if value.is_empty() {
+                String::new()
             } else {
-                "•".repeat(value.char_count())
+                HIDDEN.to_owned()
             }
         };
         let project = self
             .projects
             .get(form.project)
-            .map_or("no project", |project| project.name.as_str());
+            .map_or("no project", Project::name);
         let fields = [
             (Field::Key, "Key", form.key.clone()),
             (Field::Value, "Value", masked(&form.value)),
@@ -233,8 +236,8 @@ impl App {
         let machine_accounts = format!("{sm}/machine-accounts");
         let (project_label, project_path) = match self.context_project() {
             Some(project) => (
-                project.name.clone(),
-                format!("{sm}/projects/{}", project.id),
+                project.name().to_owned(),
+                format!("{sm}/projects/{}", project.id()),
             ),
             None => (
                 "no project selected; pick one on the Projects screen".to_owned(),
