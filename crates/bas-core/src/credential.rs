@@ -1,15 +1,14 @@
-//! Machine tokens and secret input, kept out of arguments, output, and debug formatting.
+//! Machine tokens, secret text, and Agent Access key material, kept out of output and
+//! debug formatting and stored only in the OS credential store.
 
 use std::env;
 use std::fmt;
-use std::io::{self, IsTerminal, Read};
-use std::mem;
 
 use ap_client::IdentityFingerprint;
 use bitwarden::secrets_manager::AccessToken;
 use zeroize::Zeroizing;
 
-use crate::output::Error;
+use crate::Error;
 use crate::profile::{CredentialSource, Profile};
 use crate::reference::ProfileName;
 
@@ -28,18 +27,26 @@ pub const BOOTSTRAP_CREDENTIAL_VARS: &[&str] = &[ACCESS_TOKEN_VAR, AGENT_ACCESS_
 pub struct SecretText(Zeroizing<String>);
 
 impl SecretText {
+    /// Takes ownership of the text, which is zeroed when this value drops.
+    #[must_use]
     pub fn new(text: String) -> Self {
         Self(Zeroizing::new(text))
     }
 
+    /// The secret text. Callers must not print or log it.
+    #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
     }
 
+    /// Wraps text that is already zeroed on drop.
+    #[must_use]
     pub fn from_zeroizing(text: Zeroizing<String>) -> Self {
         Self(text)
     }
 
+    /// Hands the text on without an unzeroed copy.
+    #[must_use]
     pub fn into_zeroizing(self) -> Zeroizing<String> {
         self.0
     }
@@ -52,7 +59,6 @@ impl fmt::Debug for SecretText {
 }
 
 /// A Secrets Manager machine token whose format has been checked offline.
-#[derive(Debug)]
 pub struct MachineToken(SecretText);
 
 impl MachineToken {
@@ -72,8 +78,16 @@ impl MachineToken {
         }
     }
 
+    /// The token text. Callers must not print or log it.
+    #[must_use]
     pub fn expose(&self) -> &str {
         self.0.expose()
+    }
+}
+
+impl fmt::Debug for MachineToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MachineToken(<redacted>)")
     }
 }
 
@@ -153,6 +167,7 @@ fn store_error(profile: &ProfileName, err: &keyring_core::Error) -> Error {
 /// Identity keys and session transport keys let a device act as a paired peer, so they
 /// are never written to configuration files and have no plaintext fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Material {
     /// The trusted listener's identity key pair for a direct profile.
     ListenerIdentity(ProfileName),
@@ -243,66 +258,5 @@ impl Material {
             Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(err) => Err(self.error(&err)),
         }
-    }
-}
-
-/// Channel that supplies a secret value or token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputSource {
-    Stdin,
-    Clipboard,
-}
-
-/// Reads one secret from stdin or the clipboard.
-///
-/// The text must be UTF-8, because Secrets Manager stores text. Every byte is preserved,
-/// including terminal line endings. Empty input is rejected. Machine-token parsing
-/// handles token-specific line endings separately.
-///
-/// # Errors
-///
-/// Fails when stdin is a terminal, the input is not UTF-8 or is empty, or the clipboard
-/// has no text.
-pub fn read_secret(source: InputSource) -> Result<SecretText, Error> {
-    let text = match source {
-        InputSource::Stdin => read_stdin()?,
-        InputSource::Clipboard => read_clipboard()?,
-    };
-    if text.is_empty() {
-        return Err(Error::new("the secret input is empty"));
-    }
-    Ok(SecretText(text))
-}
-
-fn read_stdin() -> Result<Zeroizing<String>, Error> {
-    let stdin = io::stdin();
-    if stdin.is_terminal() {
-        return Err(Error::usage(
-            "--stdin needs piped input; typing at a terminal would echo the secret",
-        ));
-    }
-    let mut bytes = Zeroizing::new(Vec::new());
-    stdin
-        .lock()
-        .read_to_end(&mut bytes)
-        .map_err(|_| Error::new("could not read the secret from stdin"))?;
-    match String::from_utf8(mem::take(&mut *bytes)) {
-        Ok(text) => Ok(Zeroizing::new(text)),
-        Err(err) => {
-            drop(Zeroizing::new(err.into_bytes()));
-            Err(Error::new("the secret input is not valid UTF-8 text"))
-        }
-    }
-}
-
-fn read_clipboard() -> Result<Zeroizing<String>, Error> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|_| Error::new("no clipboard is available here; use --stdin"))?;
-    match clipboard.get_text() {
-        Ok(text) => Ok(Zeroizing::new(text)),
-        Err(arboard::Error::ContentNotAvailable) => {
-            Err(Error::new("the clipboard does not contain text"))
-        }
-        Err(_) => Err(Error::new("could not read the clipboard; use --stdin")),
     }
 }

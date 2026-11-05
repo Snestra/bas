@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 use uuid::Uuid;
 
-use crate::grant::PolicyLock;
-use crate::output::Error;
+use crate::Error;
+use crate::lock::ConfigLock;
 use crate::reference::ProfileName;
 
 /// Environment variable that relocates profile configuration, mainly for headless use.
@@ -27,7 +27,8 @@ pub const CONFIG_DIR_VAR: &str = "BAS_CONFIG_DIR";
 const CONFIG_FILE: &str = "config.toml";
 
 /// Hosted Bitwarden region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Region {
     /// bitwarden.com
     Us,
@@ -35,20 +36,27 @@ pub enum Region {
     Eu,
 }
 
-/// Endpoint flags exactly as the user gave them on the command line.
-#[derive(Debug, Clone, Default)]
+/// Endpoint choices exactly as the user gave them, before validation.
+///
+/// [`Endpoints::from_flags`] accepts exactly one choice: a region, a server URL, or both
+/// an API and an identity URL.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EndpointFlags {
+    /// Hosted region.
     pub region: Option<Region>,
+    /// Self-hosted base URL, which serves `/api` and `/identity`.
     pub server_url: Option<String>,
+    /// Explicit API URL, given together with `identity_url`.
     pub api_url: Option<String>,
+    /// Explicit identity URL, given together with `api_url`.
     pub identity_url: Option<String>,
 }
 
 /// Validated HTTPS endpoints for one Bitwarden deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
-    pub api_url: Url,
-    pub identity_url: Url,
+    api_url: Url,
+    identity_url: Url,
 }
 
 impl Endpoints {
@@ -109,11 +117,14 @@ impl Endpoints {
         Ok(endpoints)
     }
 
-    /// The SDK expects URLs without a trailing slash.
+    /// API URL without a trailing slash, as the SDK expects.
+    #[must_use]
     pub fn api(&self) -> &str {
         self.api_url.as_str().trim_end_matches('/')
     }
 
+    /// Identity URL without a trailing slash, as the SDK expects.
+    #[must_use]
     pub fn identity(&self) -> &str {
         self.identity_url.as_str().trim_end_matches('/')
     }
@@ -196,21 +207,27 @@ impl Display for RelayUrl {
 /// referenced IDs resolve to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteProfile {
+    /// Name used in references.
     pub name: ProfileName,
+    /// Relay the listener is reached through.
     pub relay: RelayUrl,
+    /// Identity of the pinned listener.
     pub listener: IdentityFingerprint,
 }
 
 /// How a profile name resolves.
 #[derive(Debug, Clone)]
 pub enum Connection {
+    /// Secrets Manager access with a machine token.
     Direct(Profile),
+    /// Access through a paired listener.
     Remote(RemoteProfile),
 }
 
 /// A remote device paired with a listener.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairedPeer {
+    /// Identity of the device.
     pub fingerprint: IdentityFingerprint,
     /// Label the listener operator gave the device, if any.
     pub name: Option<ProfileName>,
@@ -219,6 +236,7 @@ pub struct PairedPeer {
 /// Where a profile's machine token comes from. Exactly one source per profile, no fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum CredentialSource {
     /// The operating system credential store.
     OsStore,
@@ -238,9 +256,13 @@ impl Display for CredentialSource {
 /// One trusted direct Secrets Manager binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
+    /// Name used in references.
     pub name: ProfileName,
+    /// Organization the machine token must belong to.
     pub organization: Uuid,
+    /// Trusted Secrets Manager endpoints.
     pub endpoints: Endpoints,
+    /// The single place the machine token comes from.
     pub credential: CredentialSource,
 }
 
@@ -363,14 +385,20 @@ impl Profiles {
         Ok(Self { path, file })
     }
 
+    /// The configuration file, which may not exist yet.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Number of direct profiles.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.file.profiles.len()
     }
 
+    /// Whether no direct profile is configured.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.file.profiles.is_empty()
     }
@@ -418,6 +446,7 @@ impl Profiles {
         })
     }
 
+    /// Direct profiles in name order.
     pub fn iter(&self) -> impl Iterator<Item = Profile> + '_ {
         self.file.profiles.keys().filter_map(|name| self.find(name))
     }
@@ -432,6 +461,7 @@ impl Profiles {
         })
     }
 
+    /// Remote profiles in name order.
     pub fn remotes(&self) -> impl Iterator<Item = RemoteProfile> + '_ {
         self.file
             .remotes
@@ -444,6 +474,7 @@ impl Profiles {
         self.file.profiles.contains_key(name) || self.file.remotes.contains_key(name)
     }
 
+    /// Adds or replaces a remote profile in memory. [`Profiles::save`] writes it.
     pub fn insert_remote(&mut self, remote: RemoteProfile) {
         self.file.remotes.insert(
             remote.name,
@@ -454,6 +485,7 @@ impl Profiles {
         );
     }
 
+    /// Removes a remote profile in memory. Returns `false` when it was not configured.
     pub fn remove_remote(&mut self, name: &ProfileName) -> bool {
         self.file.remotes.remove(name).is_some()
     }
@@ -474,6 +506,7 @@ impl Profiles {
             .collect()
     }
 
+    /// Records a device paired with the listener of a direct profile, in memory.
     pub fn insert_listener_peer(&mut self, name: &ProfileName, peer: PairedPeer) {
         self.file
             .listeners
@@ -490,6 +523,7 @@ impl Profiles {
         peers
     }
 
+    /// Adds or replaces a direct profile in memory. [`Profiles::save`] writes it.
     pub fn insert(&mut self, profile: Profile) {
         self.file.profiles.insert(
             profile.name,
@@ -502,20 +536,21 @@ impl Profiles {
         );
     }
 
+    /// Removes a direct profile in memory. Returns `false` when it was not configured.
     pub fn remove(&mut self, name: &ProfileName) -> bool {
         self.file.profiles.remove(name).is_some()
     }
 
     /// Writes the configuration atomically with owner-only permissions where supported.
     ///
-    /// Callers hold the policy lock from their [`Profiles::load`] through this save, so
+    /// Callers hold the [`ConfigLock`] from their [`Profiles::load`] through this save, so
     /// concurrent writers cannot lose each other's changes and a listener's delivery
     /// check never straddles a change.
     ///
     /// # Errors
     ///
     /// Fails when the directory or file cannot be written.
-    pub fn save(&self, _lock: &PolicyLock) -> Result<(), Error> {
+    pub fn save(&self, _lock: &ConfigLock) -> Result<(), Error> {
         let failed = || {
             Error::new(format!(
                 "could not write profile configuration {}",
@@ -578,6 +613,12 @@ fn enclosing_repository(dir: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Creates a directory and its parents, accessible only to the owner where supported.
+///
+/// # Errors
+///
+/// Fails when the directory cannot be created, or on Unix when it is not a directory
+/// owned by this user with no group or other permissions.
 #[cfg(unix)]
 pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
@@ -588,6 +629,11 @@ pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     check_private_dir(dir)
 }
 
+/// Creates a directory and its parents, accessible only to the owner where supported.
+///
+/// # Errors
+///
+/// Fails when the directory cannot be created.
 #[cfg(not(unix))]
 pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)
@@ -610,6 +656,10 @@ fn check_private_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// Replaces a private file atomically and asks the OS to persist the replacement.
+///
+/// # Errors
+///
+/// Fails when the replacement cannot be written, renamed into place, or flushed.
 pub fn replace_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

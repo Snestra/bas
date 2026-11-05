@@ -7,11 +7,11 @@
 
 use uuid::Uuid;
 
-use crate::credential::{self, SecretText};
 use crate::output::{Error, Operation, Outcome, Receipt};
-use crate::profile::Profile;
-use crate::reference::SecretRef;
-use crate::secrets::{self, Failure, Secret, Session, WriteRequest};
+use bas_core::credential::{self, SecretText};
+use bas_core::profile::Profile;
+use bas_core::reference::SecretRef;
+use bas_core::secrets::{Failure, Secret, Session, WriteRequest};
 
 /// SDK limit on key length, in characters.
 const MAX_KEY_CHARS: usize = 500;
@@ -64,16 +64,16 @@ pub fn create(
 ) -> Result<Receipt, Error> {
     check_value(value)?;
     let token = credential::load_token(profile)?;
-    secrets::runtime()?.block_on(async {
-        let session = Session::open(profile, &token).await?;
+    crate::runtime()?.block_on(async {
+        let session = Session::open(profile, &token, crate::USER_AGENT).await?;
         let duplicate_keys: Vec<SecretRef> = session
             .list_identifiers(None)
             .await?
             .into_iter()
-            .filter(|identifier| identifier.key == key)
+            .filter(|identifier| identifier.key() == key)
             .map(|identifier| SecretRef {
                 profile: profile.name.clone(),
-                id: identifier.id,
+                id: identifier.id(),
             })
             .collect();
         let note = SecretText::new(String::new());
@@ -96,10 +96,10 @@ pub fn create(
             Ok(created) => {
                 receipt.reference = Some(SecretRef {
                     profile: profile.name.clone(),
-                    id: created.id,
+                    id: created.id(),
                 });
                 (receipt.outcome, receipt.reason) =
-                    verify(&session, created.id, &write, profile).await;
+                    verify(&session, created.id(), &write, profile).await;
             }
             Err(failure) if failure.is_rejection() => {
                 return Err(refused(failure, profile, "create the secret"));
@@ -126,20 +126,20 @@ pub fn update(
 ) -> Result<Receipt, Error> {
     check_value(value)?;
     let token = credential::load_token(profile)?;
-    secrets::runtime()?.block_on(async {
-        let session = Session::open(profile, &token).await?;
+    crate::runtime()?.block_on(async {
+        let session = Session::open(profile, &token, crate::USER_AGENT).await?;
         let current = session
             .get(reference.id)
             .await
             .map_err(|failure| failure.read_error(profile, "read the secret to update"))?;
-        if current.organization_id != profile.organization {
+        if current.organization_id() != profile.organization {
             return Err(Error::new(format!(
                 "{reference} is outside the organization of profile '{}'",
                 profile.name
             )));
         }
-        if current.key.trim() != current.key
-            || current.note.expose().trim() != current.note.expose()
+        if current.key().trim() != current.key()
+            || current.note().expose().trim() != current.note().expose()
         {
             return Err(Error::new(format!(
                 "not written: {reference} has a key or note with surrounding whitespace, which \
@@ -151,23 +151,24 @@ pub fn update(
             .list_identifiers(None)
             .await?
             .into_iter()
-            .find(|identifier| identifier.id == reference.id)
+            .find(|identifier| identifier.id() == reference.id)
             .ok_or_else(|| {
                 Error::new("not written: could not confirm existing project membership")
             })?
-            .project_ids;
+            .project_ids()
+            .to_vec();
         let write = WriteRequest {
-            key: &current.key,
+            key: current.key(),
             value,
-            note: &current.note,
+            note: current.note(),
             project_ids: &project_ids,
         };
         let mut receipt = Receipt {
             outcome: Outcome::Unknown,
             operation: Operation::Update,
             reference: Some(reference.clone()),
-            key: current.key.clone(),
-            project_id: current.project_id,
+            key: current.key().to_owned(),
+            project_id: current.project_id(),
             reason: Some(RESULT_UNKNOWN),
             duplicate_keys: Vec::new(),
         };
@@ -202,11 +203,11 @@ async fn verify(
     };
     let Some(stored) = identifiers
         .into_iter()
-        .find(|identifier| identifier.id == id)
+        .find(|identifier| identifier.id() == id)
     else {
         return (Outcome::WrittenUnverified, Some(READ_BACK_FAILED));
     };
-    let mut stored_projects = stored.project_ids;
+    let mut stored_projects = stored.project_ids().to_vec();
     let mut expected_projects = write.project_ids.to_vec();
     stored_projects.sort_unstable();
     expected_projects.sort_unstable();
@@ -218,10 +219,10 @@ async fn verify(
 }
 
 fn matches_write(stored: &Secret, write: &WriteRequest<'_>, profile: &Profile) -> bool {
-    stored.organization_id == profile.organization
-        && stored.key == write.key
-        && stored.value.expose() == write.value.expose()
-        && stored.note.expose() == write.note.expose()
+    stored.organization_id() == profile.organization
+        && stored.key() == write.key
+        && stored.value().expose() == write.value.expose()
+        && stored.note().expose() == write.note.expose()
 }
 
 fn refused(failure: Failure, profile: &Profile, operation: &str) -> Error {

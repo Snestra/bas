@@ -1,13 +1,16 @@
-[package]
-name = "bas"
+[workspace]
+resolver = "3"
+members = ["crates/bas-core", "crates/bas"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Bitwarden Agent Secrets: reference-based Secrets Manager access for coding agents"
 license = "MIT"
 publish = false
 
-[dependencies]
+[workspace.dependencies]
+bas-core = { path = "crates/bas-core" }
 ap-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }
 ap-relay-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36", default-features = false }
 ap-relay-protocol = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }
@@ -25,22 +28,14 @@ toml = "1"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 zeroize = "1"
-
-[target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.6", features = ["process"] }
-
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 unwrap_used = "deny"
 allow_attributes = "deny"

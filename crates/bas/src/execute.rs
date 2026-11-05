@@ -15,11 +15,11 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::agent_access;
-use crate::credential::{self, BOOTSTRAP_CREDENTIAL_VARS, SecretText};
 use crate::output::Error;
-use crate::profile::{Connection, Profiles};
-use crate::reference::{Binding, ProfileName, SecretRef};
-use crate::secrets::{self, Session};
+use bas_core::credential::{self, BOOTSTRAP_CREDENTIAL_VARS, SecretText};
+use bas_core::profile::{Connection, Profiles};
+use bas_core::reference::{Binding, ProfileName, SecretRef};
+use bas_core::secrets::Session;
 
 /// Exit status when the program cannot be found, matching POSIX shells.
 const EXIT_NOT_FOUND: u8 = 127;
@@ -64,20 +64,20 @@ fn resolve(bindings: &[Binding]) -> Result<Vec<SecretText>, Error> {
                 .connection(name)
                 .map(|connection| (connection, ids))
         })
-        .collect::<Result<Vec<_>, Error>>()?;
+        .collect::<Result<Vec<_>, bas_core::Error>>()?;
     let mut retrieved: BTreeMap<SecretRef, SecretText> = BTreeMap::new();
-    secrets::runtime()?.block_on(async {
+    crate::runtime()?.block_on(async {
         for (connection, ids) in &selected {
             match connection {
                 Connection::Direct(profile) => {
                     let token = credential::load_token(profile)?;
-                    let session = Session::open(profile, &token).await?;
+                    let session = Session::open(profile, &token, crate::USER_AGENT).await?;
                     for secret in session.get_many(ids).await? {
                         let reference = SecretRef {
                             profile: profile.name.clone(),
-                            id: secret.id,
+                            id: secret.id(),
                         };
-                        retrieved.insert(reference, secret.value);
+                        retrieved.insert(reference, secret.into_value());
                     }
                 }
                 Connection::Remote(remote) => {
@@ -150,7 +150,7 @@ fn launch(mut command: Command, program: &OsStr) -> Error {
 /// keep `bas` alive until the child exits so its status is reported.
 #[cfg(windows)]
 fn launch(mut command: Command, program: &OsStr) -> Error {
-    let runtime = match secrets::runtime() {
+    let runtime = match crate::runtime() {
         Ok(runtime) => runtime,
         Err(err) => return err,
     };

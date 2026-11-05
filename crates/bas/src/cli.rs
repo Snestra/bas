@@ -6,9 +6,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Parser, Subcommand};
-
-use crate::profile::{EndpointFlags, Region};
+use bas_core::profile::{EndpointFlags, Region};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
 /// Reference-based access to Bitwarden Secrets Manager for coding agents.
 ///
@@ -199,7 +198,7 @@ pub struct LoginArgs {
 pub struct EndpointArgs {
     /// Hosted Bitwarden region.
     #[arg(long, value_enum)]
-    pub region: Option<Region>,
+    pub region: Option<RegionArg>,
     /// Self-hosted server base URL; uses URL/api and URL/identity.
     #[arg(long, value_name = "URL")]
     pub server_url: Option<String>,
@@ -211,10 +210,28 @@ pub struct EndpointArgs {
     pub identity_url: Option<String>,
 }
 
+/// Hosted Bitwarden region, as named on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RegionArg {
+    /// bitwarden.com
+    Us,
+    /// bitwarden.eu
+    Eu,
+}
+
+impl From<RegionArg> for Region {
+    fn from(region: RegionArg) -> Self {
+        match region {
+            RegionArg::Us => Self::Us,
+            RegionArg::Eu => Self::Eu,
+        }
+    }
+}
+
 impl From<EndpointArgs> for EndpointFlags {
     fn from(args: EndpointArgs) -> Self {
         Self {
-            region: args.region,
+            region: args.region.map(Region::from),
             server_url: args.server_url,
             api_url: args.api_url,
             identity_url: args.identity_url,

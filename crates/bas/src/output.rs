@@ -4,10 +4,10 @@ use std::fmt::{self, Display};
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use bas_core::reference::SecretRef;
 use serde::Serialize;
 
 use crate::grant::{Grant, State};
-use crate::reference::SecretRef;
 
 /// Exit status for a failure inside `bas` itself.
 pub const EXIT_FAILURE: u8 = 1;
@@ -20,8 +20,9 @@ pub const EXIT_UNKNOWN_OUTCOME: u8 = 4;
 
 /// Application error whose message is built only from `bas` text and nonsecret identifiers.
 ///
-/// No `From` conversions exist for upstream errors, so every upstream failure is mapped to
-/// fixed wording at its call site and upstream bodies never reach the terminal.
+/// The only `From` conversion is from [`bas_core::Error`], whose messages follow the same
+/// rule. Every other upstream failure is mapped to fixed wording at its call site, so
+/// upstream bodies never reach the terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     message: String,
@@ -62,6 +63,16 @@ impl Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<bas_core::Error> for Error {
+    fn from(err: bas_core::Error) -> Self {
+        if err.is_usage() {
+            Self::usage(err.to_string())
+        } else {
+            Self::new(err.to_string())
+        }
+    }
+}
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 

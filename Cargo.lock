@@ -307,19 +307,32 @@ dependencies = [
  "ap-client",
  "ap-relay-client",
  "ap-relay-protocol",
- "apple-native-keyring-store",
  "arboard",
  "async-trait",
- "atomicwrites",
+ "bas-core",
  "bitwarden",
  "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "bas-core"
+version = "0.1.0"
+dependencies = [
+ "ap-client",
+ "apple-native-keyring-store",
+ "atomicwrites",
+ "bitwarden",
  "dbus-secret-service-keyring-store",
  "dirs",
  "keyring-core",
  "rustix 1.1.6",
  "serde",
- "serde_json",
- "tokio",
  "toml",
  "url",
  "uuid",

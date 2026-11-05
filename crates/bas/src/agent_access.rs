@@ -41,12 +41,13 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::approval::{self, Decision, Terminal};
-use crate::credential::{self, Material, SecretText};
-use crate::grant::{Policy, PolicyLock};
+use crate::grant::{self, Policy};
 use crate::output::{self, Error};
-use crate::profile::{PairedPeer, Profile, Profiles, RelayUrl, RemoteProfile};
-use crate::reference::{ProfileName, SecretRef, parse_secret_id};
-use crate::secrets::{self, Session};
+use bas_core::credential::{self, Material, SecretText};
+use bas_core::lock::ConfigLock;
+use bas_core::profile::{PairedPeer, Profile, Profiles, RelayUrl, RemoteProfile};
+use bas_core::reference::{ProfileName, SecretRef, parse_secret_id};
+use bas_core::secrets::Session;
 
 /// How long the listener waits for the operator to approve one credential request.
 ///
@@ -242,7 +243,7 @@ impl ListenerStore {
         if !known {
             // This runs inside the SDK event loop. Waiting here for a lock that this
             // listener holds while that loop sends a reply would stall both.
-            let Some(policy_lock) = PolicyLock::try_acquire()? else {
+            let Some(policy_lock) = ConfigLock::try_acquire()? else {
                 drop(material.delete());
                 return Err(Error::new(
                     "another bas process is changing profiles or grants, or a reply is being \
@@ -252,15 +253,17 @@ impl ListenerStore {
             let peer = pins.verified.take().ok_or_else(|| {
                 Error::new("the verified device changed while it was being saved")
             })?;
-            let recorded = Profiles::load().and_then(|mut profiles| {
-                if profiles.get(&profile)? != pins.profile {
-                    return Err(Error::new(
-                        "the listener profile changed during pairing; restart the listener",
-                    ));
-                }
-                profiles.insert_listener_peer(&profile, peer.clone());
-                profiles.save(&policy_lock)
-            });
+            let recorded = Profiles::load()
+                .map_err(Error::from)
+                .and_then(|mut profiles| {
+                    if profiles.get(&profile)? != pins.profile {
+                        return Err(Error::new(
+                            "the listener profile changed during pairing; restart the listener",
+                        ));
+                    }
+                    profiles.insert_listener_peer(&profile, peer.clone());
+                    Ok(profiles.save(&policy_lock)?)
+                });
             if let Err(err) = recorded {
                 drop(material.delete());
                 return Err(err);
@@ -320,7 +323,7 @@ fn load_transport(material: &Material) -> Result<Option<MultiDeviceTransport>, E
 }
 
 fn store_identity(material: &Material, identity: &IdentityKeyPair) -> Result<(), Error> {
-    material.store(&Zeroizing::new(identity.to_cose()))
+    Ok(material.store(&Zeroizing::new(identity.to_cose()))?)
 }
 
 fn load_identity(material: &Material) -> Result<Option<IdentityKeyPair>, Error> {
@@ -409,7 +412,7 @@ impl Display for Denial {
 /// Fails when stored pairing state is missing or corrupt, the relay is unreachable, or
 /// pairing is requested without a terminal.
 pub fn listen(listener: Listener) -> Result<ExitCode, Error> {
-    secrets::runtime()?.block_on(run_listener(listener))
+    crate::runtime()?.block_on(run_listener(listener))
 }
 
 async fn run_listener(listener: Listener) -> Result<ExitCode, Error> {
@@ -426,7 +429,7 @@ async fn run_listener(listener: Listener) -> Result<ExitCode, Error> {
         ));
     }
     let name = profile.name.clone();
-    let startup_lock = PolicyLock::acquire()?;
+    let startup_lock = grant::acquire_lock()?;
     let profiles = Profiles::load()?;
     if profiles.get(&name)? != profile {
         return Err(Error::new(
@@ -751,7 +754,7 @@ fn check_peer(context: &DeliveryContext<'_>, device: IdentityFingerprint) -> Res
             return Err(Denial::Fenced);
         }
     }
-    let profiles = Profiles::load().map_err(Denial::Unreadable)?;
+    let profiles = Profiles::load().map_err(|err| Denial::Unreadable(err.into()))?;
     let current = profiles
         .get(&context.profile.name)
         .map_err(|_| Denial::ProfileChanged)?;
@@ -775,12 +778,14 @@ async fn final_authorization(
     context: &DeliveryContext<'_>,
     device: IdentityFingerprint,
     delivery: &Delivery,
-) -> Result<PolicyLock, Denial> {
+) -> Result<ConfigLock, Denial> {
     let policy_lock = loop {
         if Instant::now() >= context.deadline {
             return Err(Denial::PolicyBusy);
         }
-        if let Some(guard) = PolicyLock::try_acquire().map_err(Denial::Unreadable)? {
+        if let Some(guard) =
+            ConfigLock::try_acquire().map_err(|err| Denial::Unreadable(err.into()))?
+        {
             break guard;
         }
         sleep_until((Instant::now() + LOCK_RETRY).min(context.deadline)).await;
@@ -889,7 +894,7 @@ async fn retrieve(
         Some(open) => open,
         None => {
             let token = credential::load_token(profile)?;
-            session.insert(Session::open(profile, &token).await?)
+            session.insert(Session::open(profile, &token, crate::USER_AGENT).await?)
         }
     };
     let result = open.get_many(&[id]).await;
@@ -897,11 +902,11 @@ async fn retrieve(
         Ok(secrets) => secrets,
         Err(err) => {
             *session = None;
-            return Err(err);
+            return Err(err.into());
         }
     };
     match secrets.pop() {
-        Some(secret) if secrets.is_empty() && secret.id == id => Ok(secret.value),
+        Some(secret) if secrets.is_empty() && secret.id() == id => Ok(secret.into_value()),
         _ => Err(Error::new(format!(
             "secret {id} is not accessible to profile '{}'",
             profile.name
@@ -927,7 +932,7 @@ fn report(notification: &UserClientNotification) {
 /// Fails when the name is taken, no terminal is available, the code or fingerprint is not
 /// confirmed, the relay is unreachable, or the key material cannot be stored.
 pub fn pair(name: ProfileName, relay: RelayUrl) -> Result<ExitCode, Error> {
-    secrets::runtime()?.block_on(run_pair(name, relay))
+    crate::runtime()?.block_on(run_pair(name, relay))
 }
 
 async fn run_pair(name: ProfileName, relay: RelayUrl) -> Result<ExitCode, Error> {
@@ -998,20 +1003,20 @@ async fn run_pair(name: ProfileName, relay: RelayUrl) -> Result<ExitCode, Error>
         .ok_or_else(|| Error::new("pairing finished without a session"))?;
     let identity_material = Material::RemoteIdentity(name.clone());
     let connection_material = Material::RemoteConnection(name.clone());
-    let policy_lock = PolicyLock::acquire()?;
+    let policy_lock = grant::acquire_lock()?;
     let mut profiles = Profiles::load()?;
     if profiles.is_configured(&name) {
         return Err(taken());
     }
     let saved = store_identity(&identity_material, &identity)
-        .and_then(|()| connection_material.store(&encode_transport(&transport)?))
+        .and_then(|()| Ok(connection_material.store(&encode_transport(&transport)?)?))
         .and_then(|()| {
             profiles.insert_remote(RemoteProfile {
                 name: name.clone(),
                 relay: relay.clone(),
                 listener,
             });
-            profiles.save(&policy_lock)
+            Ok(profiles.save(&policy_lock)?)
         });
     if let Err(err) = saved {
         drop(identity_material.delete());
@@ -1166,7 +1171,7 @@ fn request_error(reference: &SecretRef, relay: &RelayUrl, err: &ClientError) -> 
 /// Fails when the credential store is unusable.
 pub fn forget_remote(name: &ProfileName) -> Result<(), Error> {
     Material::RemoteIdentity(name.clone()).delete()?;
-    Material::RemoteConnection(name.clone()).delete()
+    Ok(Material::RemoteConnection(name.clone()).delete()?)
 }
 
 /// Deletes the listener identity and paired-device sessions of a direct profile.
@@ -1178,5 +1183,5 @@ pub fn forget_listener(name: &ProfileName, peers: &[PairedPeer]) -> Result<(), E
     for peer in peers {
         Material::ListenerPeer(name.clone(), peer.fingerprint).delete()?;
     }
-    Material::ListenerIdentity(name.clone()).delete()
+    Ok(Material::ListenerIdentity(name.clone()).delete()?)
 }
