@@ -4,12 +4,12 @@ use std::time::{Duration, Instant};
 use arboard::Clipboard;
 use bas_core::credential::{MachineToken, SecretText};
 use bas_core::profile::Profile;
-use bas_core::secrets::{Identifier, Project, Secret, Session, WriteRequest};
+use bas_core::secrets::{Failure, Identifier, Project, Secret, Session, WriteRequest};
 use bas_core::{Uuid, Zeroizing};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use crate::event::{AppEvent, Event, EventHandler};
+use crate::event::{AppEvent, Event, EventHandler, WriteOutcome};
 
 /// User agent sent with every Secrets Manager request.
 const USER_AGENT: &str = concat!("bas-tui/", env!("CARGO_PKG_VERSION"));
@@ -138,6 +138,9 @@ pub struct SecretForm {
     /// The project the secret will be in. Starts as the secret's own project, which may be
     /// missing from [`App::projects`] when access comes from a policy on the secret itself.
     pub project: Option<Uuid>,
+    /// The secret's project when the form opened. While `project` still equals it, a save
+    /// keeps every project the secret belongs to, not only the first.
+    pub original_project: Option<Uuid>,
     pub focus: Field,
     /// Keys type into the focused field. Otherwise keys move, reveal, and save.
     pub typing: bool,
@@ -293,15 +296,56 @@ impl App {
             } => self.on_secrets(project, result, done),
             AppEvent::Secret { id, result } => self.on_secret(id, result),
             AppEvent::SecretSaved(result) => self.on_secret_saved(result),
-            AppEvent::WriteFailed { action, error } => {
+            AppEvent::WriteFailed {
+                action,
+                error,
+                outcome,
+            } => self.on_write_failed(&action, &error, outcome),
+            AppEvent::Quit => self.running = false,
+        }
+        Ok(())
+    }
+
+    fn on_write_failed(&mut self, action: &str, error: &color_eyre::Report, outcome: WriteOutcome) {
+        match outcome {
+            WriteOutcome::Refused => {
                 if let Some(Screen::Form(form)) = self.screens.last_mut() {
                     form.saving = false;
                 }
                 self.status = Status::Error(format!("Could not {action}: {error}"));
             }
-            AppEvent::Quit => self.running = false,
+            WriteOutcome::Unknown => {
+                // The server may have applied the write, so a retry could repeat it. Show
+                // what the server holds now instead of offering the same form again.
+                if matches!(self.screens.last(), Some(Screen::Form(_))) {
+                    self.screens.pop();
+                }
+                self.status = Status::Error(format!(
+                    "Unknown whether the server did {action}: {error}. Lists were re-read from \
+                     the server; check them before trying again"
+                ));
+                self.reload_all();
+            }
         }
-        Ok(())
+    }
+
+    /// Re-reads the projects and every open secrets list from the server.
+    fn reload_all(&self) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let listings: Vec<Option<Uuid>> = self
+            .screens
+            .iter()
+            .filter_map(|screen| match screen {
+                Screen::Secrets(list) => Some(list.project),
+                _ => None,
+            })
+            .collect();
+        self.load_projects(session);
+        for project in listings {
+            self.load_secrets(session, project);
+        }
     }
 
     fn on_connected(&mut self, result: color_eyre::Result<Session>) -> color_eyre::Result<()> {
@@ -321,7 +365,10 @@ impl App {
         let projects = match result {
             Ok(projects) => projects,
             Err(err) => {
-                self.status = Status::Error(format!("Could not list projects: {err}"));
+                self.status = Status::Error(match done {
+                    Some(done) => format!("{done}, but re-reading the projects failed: {err}"),
+                    None => format!("Could not list projects: {err}"),
+                });
                 return;
             }
         };
@@ -348,7 +395,10 @@ impl App {
         let items = match result {
             Ok(items) => items,
             Err(err) => {
-                self.status = Status::Error(format!("Could not list secrets: {err}"));
+                self.status = Status::Error(match done {
+                    Some(done) => format!("{done}, but re-reading the secrets failed: {err}"),
+                    None => format!("Could not list secrets: {err}"),
+                });
                 return;
             }
         };
@@ -693,6 +743,7 @@ impl App {
             value: SecretText::default(),
             note: SecretText::default(),
             project,
+            original_project: None,
             focus: Field::Key,
             typing: true,
             revealed: false,
@@ -781,11 +832,25 @@ impl App {
         // The form keeps its text so a refused save can be corrected and retried.
         let value = SecretText::new(form.value.expose().to_owned());
         let note = SecretText::new(form.note.expose().to_owned());
-        let project_ids = [project];
+        let keep_projects = form.original_project == Some(project);
         form.saving = true;
         self.status = Status::Info(format!("Saving {key}"));
         let editing = form.editing;
         self.events.spawn(async move {
+            let action = format!("save {key}");
+            let project_ids = match editing {
+                Some(id) if keep_projects => match current_project_ids(&session, id).await {
+                    Ok(ids) => ids,
+                    Err(error) => {
+                        return AppEvent::WriteFailed {
+                            action,
+                            error,
+                            outcome: WriteOutcome::Refused,
+                        };
+                    }
+                },
+                _ => vec![project],
+            };
             let write = WriteRequest {
                 key: &key,
                 value: &value,
@@ -798,10 +863,7 @@ impl App {
             };
             match written {
                 Ok(stored) => AppEvent::SecretSaved(read_secret(&session, stored.id()).await),
-                Err(error) => AppEvent::WriteFailed {
-                    action: format!("save {key}"),
-                    error: error.into(),
-                },
+                Err(failure) => write_failed(action, failure),
             }
         });
     }
@@ -876,10 +938,7 @@ impl App {
                         stored.name()
                     )),
                 },
-                Err(error) => AppEvent::WriteFailed {
-                    action,
-                    error: error.into(),
-                },
+                Err(failure) => write_failed(action, failure),
             }
         });
     }
@@ -902,10 +961,7 @@ impl App {
                             result: list_secrets(&session, listing).await,
                             done: Some(format!("Moved {key} to trash. Restore it at {trash}")),
                         },
-                        Err(error) => AppEvent::WriteFailed {
-                            action: format!("delete {key}"),
-                            error: error.into(),
-                        },
+                        Err(failure) => write_failed(format!("delete {key}"), failure),
                     }
                 });
             }
@@ -918,10 +974,7 @@ impl App {
                             select: None,
                             done: Some(format!("Deleted project {name}")),
                         },
-                        Err(error) => AppEvent::WriteFailed {
-                            action: format!("delete project {name}"),
-                            error: error.into(),
-                        },
+                        Err(failure) => write_failed(format!("delete project {name}"), failure),
                     }
                 });
             }
@@ -1029,6 +1082,32 @@ async fn list_secrets(
     Ok(secrets)
 }
 
+/// Every project a secret belongs to. A secret read returns only the first one, while the
+/// identifier listing keeps them all.
+async fn current_project_ids(session: &Session, id: Uuid) -> color_eyre::Result<Vec<Uuid>> {
+    session
+        .list_identifiers(None)
+        .await?
+        .into_iter()
+        .find(|identifier| identifier.id() == id)
+        .map(|identifier| identifier.project_ids().to_vec())
+        .ok_or_else(|| color_eyre::eyre::eyre!("could not confirm the secret's current projects"))
+}
+
+/// The event for a failed write. Only a refusal is known to have changed nothing.
+fn write_failed(action: String, failure: Failure) -> AppEvent {
+    let outcome = if failure.is_rejection() {
+        WriteOutcome::Refused
+    } else {
+        WriteOutcome::Unknown
+    };
+    AppEvent::WriteFailed {
+        action,
+        error: failure.into(),
+        outcome,
+    }
+}
+
 async fn read_secret(session: &Session, id: Uuid) -> color_eyre::Result<Secret> {
     Ok(session.get(id).await?)
 }
@@ -1037,6 +1116,7 @@ async fn read_secret(session: &Session, id: Uuid) -> color_eyre::Result<Secret> 
 fn edit_form(detail: &Secret) -> SecretForm {
     let project = detail.project_id();
     SecretForm {
+        original_project: project,
         editing: Some(detail.id()),
         key: detail.key().to_owned(),
         value: SecretText::new(detail.value().expose().to_owned()),

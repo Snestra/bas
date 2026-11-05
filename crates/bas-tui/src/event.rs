@@ -53,9 +53,19 @@ pub enum AppEvent {
     WriteFailed {
         action: String,
         error: color_eyre::Report,
+        outcome: WriteOutcome,
     },
     /// Leave the application.
     Quit,
+}
+
+/// What a failed write means for the server's data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOutcome {
+    /// The SDK or server refused it, so nothing changed and the form can be retried.
+    Refused,
+    /// No usable answer arrived, so the server may have applied it.
+    Unknown,
 }
 
 /// Terminal event handler.
