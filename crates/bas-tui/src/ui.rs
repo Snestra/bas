@@ -2,7 +2,6 @@ use std::time::Instant;
 
 use bas_core::Uuid;
 use bas_core::credential::SecretText;
-use bas_core::secrets::Project;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -176,10 +175,9 @@ impl App {
                 HIDDEN.to_owned()
             }
         };
-        let project = self
-            .projects
-            .get(form.project)
-            .map_or("no project", Project::name);
+        let project = form
+            .project
+            .map_or_else(|| "pick a project".to_owned(), |id| self.project_name(id));
         let fields = [
             (Field::Key, "Key", form.key.clone()),
             (Field::Value, "Value", masked(&form.value)),
@@ -276,6 +274,10 @@ impl App {
                 machine_accounts,
             ),
             ("Item counts overview".to_owned(), sm.clone()),
+            (
+                "Ask admins for Secrets Manager access".to_owned(),
+                format!("{}/#/request-sm-access", self.vault_base),
+            ),
             ("Import".to_owned(), format!("{sm}/settings/import")),
             ("Export".to_owned(), format!("{sm}/settings/export")),
             (
@@ -291,7 +293,7 @@ impl App {
     fn render_status(&self, area: Rect, buf: &mut Buffer) {
         let countdown = self.copied.as_ref().map(|copied| {
             let left = copied.deadline.saturating_duration_since(Instant::now());
-            format!(" Clipboard clears in {}s ", left.as_secs() + 1)
+            format!(" Clipboard clears in {}s ", left.as_millis().div_ceil(1000))
         });
         let width = countdown.as_ref().map_or(0, |text| text.chars().count());
         let [message_area, countdown_area] = Layout::horizontal([

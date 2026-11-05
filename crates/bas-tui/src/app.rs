@@ -79,6 +79,8 @@ impl SecretsScreen {
 
 /// One secret, value and note hidden until revealed.
 pub struct SecretScreen {
+    /// The secret this screen shows. Read results for any other ID are ignored.
+    pub id: Uuid,
     /// `None` while the read is in flight.
     pub detail: Option<Secret>,
     pub revealed: bool,
@@ -89,7 +91,7 @@ pub struct SecretScreen {
 impl fmt::Debug for SecretScreen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SecretScreen")
-            .field("secret", &self.detail.as_ref().map(Secret::id))
+            .field("id", &self.id)
             .field("revealed", &self.revealed)
             .finish_non_exhaustive()
     }
@@ -133,8 +135,9 @@ pub struct SecretForm {
     pub key: String,
     pub value: SecretText,
     pub note: SecretText,
-    /// Index into [`App::projects`].
-    pub project: usize,
+    /// The project the secret will be in. Starts as the secret's own project, which may be
+    /// missing from [`App::projects`] when access comes from a policy on the secret itself.
+    pub project: Option<Uuid>,
     pub focus: Field,
     /// Keys type into the focused field. Otherwise keys move, reveal, and save.
     pub typing: bool,
@@ -202,6 +205,13 @@ pub enum Status {
 pub struct Copied {
     pub text: Zeroizing<String>,
     pub deadline: Instant,
+}
+
+impl Drop for App {
+    /// Best effort: also clears the clipboard when a panic unwinds through the app.
+    fn drop(&mut self) {
+        self.clear_clipboard();
+    }
 }
 
 impl fmt::Debug for Copied {
@@ -281,7 +291,7 @@ impl App {
                 result,
                 done,
             } => self.on_secrets(project, result, done),
-            AppEvent::Secret(result) => self.on_secret(result),
+            AppEvent::Secret { id, result } => self.on_secret(id, result),
             AppEvent::SecretSaved(result) => self.on_secret_saved(result),
             AppEvent::WriteFailed { action, error } => {
                 if let Some(Screen::Form(form)) = self.screens.last_mut() {
@@ -357,17 +367,20 @@ impl App {
         }
     }
 
-    fn on_secret(&mut self, result: color_eyre::Result<Secret>) {
+    fn on_secret(&mut self, id: Uuid, result: color_eyre::Result<Secret>) {
         let Some(Screen::Secret(screen)) = self.screens.last_mut() else {
             return;
         };
+        if screen.id != id {
+            return;
+        }
         match result {
             Ok(detail) => {
                 let edit = screen.edit_on_load;
                 screen.edit_on_load = false;
                 self.status = Status::Info(format!("Read {}", detail.key()));
                 if edit {
-                    let form = edit_form(&self.projects, &detail);
+                    let form = edit_form(&detail);
                     screen.detail = Some(detail);
                     self.screens.push(Screen::Form(form));
                 } else {
@@ -403,6 +416,7 @@ impl App {
                 screen.revealed = false;
             }
             _ => self.screens.push(Screen::Secret(SecretScreen {
+                id: detail.id(),
                 detail: Some(detail),
                 revealed: false,
                 edit_on_load: false,
@@ -624,7 +638,7 @@ impl App {
                 self.copy(&key_name, text);
             }
             KeyCode::Char('e') => {
-                let form = edit_form(&self.projects, detail);
+                let form = edit_form(detail);
                 self.screens.push(Screen::Form(form));
             }
             KeyCode::Char('d') => {
@@ -647,13 +661,18 @@ impl App {
             return;
         };
         self.screens.push(Screen::Secret(SecretScreen {
+            id,
             detail: None,
             revealed: false,
             edit_on_load,
         }));
         self.status = Status::Info("Reading the secret".to_owned());
-        self.events
-            .spawn(async move { AppEvent::Secret(read_secret(&session, id).await) });
+        self.events.spawn(async move {
+            AppEvent::Secret {
+                id,
+                result: read_secret(&session, id).await,
+            }
+        });
     }
 
     fn open_new_form(&mut self) {
@@ -666,8 +685,8 @@ impl App {
         }
         let project = self
             .context_project()
-            .and_then(|current| self.projects.iter().position(|p| p.id() == current.id()))
-            .unwrap_or(0);
+            .or_else(|| self.projects.first())
+            .map(Project::id);
         self.screens.push(Screen::Form(SecretForm {
             editing: None,
             key: String::new(),
@@ -733,12 +752,12 @@ impl App {
             KeyCode::Left | KeyCode::Char('h')
                 if form.focus == Field::Project && project_count > 0 =>
             {
-                form.project = (form.project + project_count - 1) % project_count;
+                form.project = step_project(&self.projects, form.project, Direction::Previous);
             }
             KeyCode::Right | KeyCode::Char('l')
                 if form.focus == Field::Project && project_count > 0 =>
             {
-                form.project = (form.project + 1) % project_count;
+                form.project = step_project(&self.projects, form.project, Direction::Next);
             }
             _ => {}
         }
@@ -751,15 +770,18 @@ impl App {
         let Some(Screen::Form(form)) = self.screens.last_mut() else {
             return;
         };
-        let Some(project) = self.projects.get(form.project) else {
-            self.status = Status::Error("Pick a project for the secret".to_owned());
+        let Some(project) = form.project else {
+            self.status = Status::Error(
+                "Pick a project with Left or Right. A machine account must put each secret in one"
+                    .to_owned(),
+            );
             return;
         };
         let key = form.key.trim().to_owned();
         // The form keeps its text so a refused save can be corrected and retried.
         let value = SecretText::new(form.value.expose().to_owned());
         let note = SecretText::new(form.note.expose().to_owned());
-        let project_ids = [project.id()];
+        let project_ids = [project];
         form.saving = true;
         self.status = Status::Info(format!("Saving {key}"));
         let editing = form.editing;
@@ -1012,11 +1034,8 @@ async fn read_secret(session: &Session, id: Uuid) -> color_eyre::Result<Secret> 
 }
 
 /// A form prefilled from a secret the server returned.
-fn edit_form(projects: &[Project], detail: &Secret) -> SecretForm {
-    let project = detail
-        .project_id()
-        .and_then(|id| projects.iter().position(|p| p.id() == id))
-        .unwrap_or(0);
+fn edit_form(detail: &Secret) -> SecretForm {
+    let project = detail.project_id();
     SecretForm {
         editing: Some(detail.id()),
         key: detail.key().to_owned(),
@@ -1028,6 +1047,21 @@ fn edit_form(projects: &[Project], detail: &Secret) -> SecretForm {
         revealed: false,
         saving: false,
     }
+}
+
+/// The project before or after `current` in `projects`, wrapping around. A project missing
+/// from the list steps to the first or last one.
+fn step_project(projects: &[Project], current: Option<Uuid>, direction: Direction) -> Option<Uuid> {
+    let count = projects.len();
+    let index = current.and_then(|id| projects.iter().position(|p| p.id() == id));
+    let next = match (index, direction) {
+        (_, _) if count == 0 => return current,
+        (Some(i), Direction::Next) => (i + 1) % count,
+        (Some(i), Direction::Previous) => (i + count - 1) % count,
+        (None, Direction::Next) => 0,
+        (None, Direction::Previous) => count - 1,
+    };
+    projects.get(next).map(Project::id)
 }
 
 /// A key that types its character: no modifier other than Shift.

@@ -43,7 +43,10 @@ pub enum AppEvent {
         done: Option<String>,
     },
     /// One secret was read.
-    Secret(color_eyre::Result<Secret>),
+    Secret {
+        id: Uuid,
+        result: color_eyre::Result<Secret>,
+    },
     /// A create or update finished and the secret was read back from the server.
     SecretSaved(color_eyre::Result<Secret>),
     /// A write was refused or failed. `action` completes "Could not ...".
@@ -113,12 +116,16 @@ impl EventTask {
         let tick_rate = Duration::from_secs_f64(1.0 / TICK_FPS);
         let mut reader = crossterm::event::EventStream::new();
         let mut tick = tokio::time::interval(tick_rate);
+        let mut exit = ExitSignals::new()?;
         loop {
             let tick_delay = tick.tick();
             let crossterm_event = reader.next().fuse();
             tokio::select! {
               _ = self.sender.closed() => {
                 break;
+              }
+              () = exit.recv() => {
+                self.send(Event::App(AppEvent::Quit));
               }
               _ = tick_delay => {
                 self.send(Event::Tick);
@@ -134,5 +141,47 @@ impl EventTask {
     fn send(&self, event: Event) {
         // Shutting down drops the receiver, so a failed send is expected then.
         let _ = self.sender.send(event);
+    }
+}
+
+/// Signals that end the app the same way as `q`, so a copied value is still cleared when the
+/// terminal closes or the process is asked to stop.
+struct ExitSignals {
+    #[cfg(unix)]
+    hangup: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    close: tokio::signal::windows::CtrlClose,
+}
+
+impl ExitSignals {
+    #[cfg(unix)]
+    fn new() -> color_eyre::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            hangup: signal(SignalKind::hangup())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
+    }
+
+    #[cfg(windows)]
+    fn new() -> color_eyre::Result<Self> {
+        Ok(Self {
+            close: tokio::signal::windows::ctrl_close()?,
+        })
+    }
+
+    #[cfg(unix)]
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.hangup.recv() => {}
+            _ = self.terminate.recv() => {}
+        }
+    }
+
+    #[cfg(windows)]
+    async fn recv(&mut self) {
+        self.close.recv().await;
     }
 }
