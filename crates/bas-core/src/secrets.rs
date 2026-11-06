@@ -125,8 +125,11 @@ impl std::error::Error for Failure {}
 /// Why the identity server did not sign the token in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SignInFailure {
-    /// The identity server refused the token.
+    /// The identity server refused the token as unknown there, so another deployment may know
+    /// it. A wrong hosted region answers `400 {"error": "invalid_client"}`.
     Refused,
+    /// The identity server declined the request for another reason, such as a rate limit.
+    Declined,
     /// No usable response arrived.
     Unreachable,
     /// The answer could not be used.
@@ -140,7 +143,7 @@ enum SignInFailure {
 impl SignInFailure {
     fn error(self, name: &ProfileName, endpoints: &Endpoints) -> Error {
         Error::new(match self {
-            Self::Refused => {
+            Self::Refused | Self::Declined => {
                 format!("Secrets Manager refused the machine token for profile '{name}'")
             }
             Self::Unreachable => format!(
@@ -183,7 +186,8 @@ async fn authenticate(
         Ok(response) => response.authenticated,
         Err(err) => {
             return Err(match Failure::classify(&err) {
-                Failure::IdentityRejected | Failure::Status(400..=499) => SignInFailure::Refused,
+                Failure::IdentityRejected | Failure::Status(400 | 401) => SignInFailure::Refused,
+                Failure::Status(400..=499) => SignInFailure::Declined,
                 Failure::Transport => SignInFailure::Unreachable,
                 _ => SignInFailure::Failed,
             });

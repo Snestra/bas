@@ -39,9 +39,16 @@ pub fn run(start: Start) -> color_eyre::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let mut terminal = ratatui::try_init().map_err(|err| {
-            color_eyre::eyre::eyre!(err).wrap_err("bas tui needs an interactive terminal")
-        })?;
+        let mut terminal = match ratatui::try_init() {
+            Ok(terminal) => terminal,
+            Err(err) => {
+                // try_init can fail after it enabled raw mode.
+                ratatui::restore();
+                return Err(
+                    color_eyre::eyre::eyre!(err).wrap_err("bas tui needs an interactive terminal")
+                );
+            }
+        };
         let result = run_in(&mut terminal, start).await;
         ratatui::restore();
         result
