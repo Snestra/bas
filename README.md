@@ -30,7 +30,7 @@ The `ci` workflow in `ci.yml` runs on demand, and the `release` workflow in `rel
 
 ## Install from a release
 
-Each [GitHub release](https://github.com/Snestra/bas/releases) publishes `bas-<OS>-<ARCH>.tar.gz` archives built by the `release` workflow on Linux, macOS, and Windows runners. Download the archive for your platform, extract `bas` (or `bas.exe`), and put it on your `PATH`. The archive contains `bas`, `bas-tui`, and this README. Run `bas-tui --profile <profile>` with a profile you created through `bas auth login` to manage that profile's secrets and projects in the terminal.
+Each [GitHub release](https://github.com/Snestra/bas/releases) publishes `bas-<OS>-<ARCH>.tar.gz` archives built by the `release` workflow on Linux, macOS, and Windows runners. Download the archive for your platform, extract `bas` (or `bas.exe`), and put it on your `PATH`. The archive contains `bas` and this README. Run `bas tui` to manage a profile's secrets and projects in the terminal. When the profile doesn't exist yet, `bas tui` asks for the machine account access token and saves the profile the way `bas auth login` does.
 
 ## Build and install
 
@@ -62,13 +62,14 @@ The CI workflow builds and checks `bas` on the native architecture of each runne
 
 Direct access starts with a Secrets Manager machine account that can read only the projects you need. A profile in `bas` ties the machine account token to one organization and one endpoint. `bas` saves the profile only after a successful sign-in with the token, organization, and endpoint.
 
-For an EU account, copy the machine account access token to the clipboard and run the commands below.
+The token is all you need. Run the command below in a terminal and paste the token when it asks. `bas` hides what you paste, learns the organization from Bitwarden's answer, and tries bitwarden.com, then bitwarden.eu. The profile is named `default` unless you give a name.
 
 ```sh
-bas auth login work --organization <organization-id> --region eu --clipboard
-bas auth status work
-bas auth list
+bas auth login
+bas auth status default
 ```
+
+The flags still work when you want to pin the answer: `bas auth login work --organization <organization-id> --region eu --clipboard`. `docs/first-run.md` explains what `bas` learns by itself and what each first-run message means.
 
 ```mermaid
 sequenceDiagram
@@ -76,16 +77,16 @@ sequenceDiagram
     participant bas
     participant SM as Secrets Manager
     participant Store as OS credential store
-    You->>bas: bas auth login work --clipboard
+    You->>bas: bas auth login, then paste the token
     bas->>SM: sign in with the token
     SM-->>bas: sign-in succeeds for the organization
     bas->>Store: save the token
     bas->>bas: save the profile in config.toml
 ```
 
-Use `--region us` for the US service. `bas auth login --help` describes custom HTTPS endpoints and input from stdin. Never pass a token as an argument, and never paste a token into an agent transcript.
+`bas auth login --help` describes custom HTTPS endpoints and input from stdin. Never pass a token as an argument, and never paste a token into an agent transcript.
 
-With clipboard or stdin login, `bas` saves the token in the credential store of the operating system. If the credential store isn't available, the login fails. `bas` never falls back to saving the token in plain text.
+With a pasted, clipboard, or stdin token, `bas` saves the token in the credential store of the operating system. If the credential store isn't available, the login fails. `bas` never falls back to saving the token in plain text.
 
 For direct use on a machine without a desktop session, supply `BWS_ACCESS_TOKEN` through the protected secret delivery you already use, and log in with `--from-env`. A profile created with `--from-env` reads only the environment variable, and it never falls back to another account.
 

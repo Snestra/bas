@@ -2,7 +2,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
-use bas_core::credential::{MachineToken, SecretText};
+use bas_core::credential::SecretText;
 use bas_core::profile::Profile;
 use bas_core::secrets::{Failure, Identifier, Project, Secret, Session, WriteRequest};
 use bas_core::{Uuid, Zeroizing};
@@ -10,9 +10,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use crate::event::{AppEvent, Event, EventHandler, WriteOutcome};
-
-/// User agent sent with every Secrets Manager request.
-const USER_AGENT: &str = concat!("bas-tui/", env!("CARGO_PKG_VERSION"));
 
 /// How long a copied value stays on the clipboard before it is cleared.
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
@@ -229,23 +226,14 @@ impl fmt::Debug for Copied {
 }
 
 impl App {
-    /// Builds the app and starts signing in to the profile off the UI loop.
-    pub fn new(profile: Profile, token: MachineToken) -> Self {
-        let vault_base = web_vault_base(profile.endpoints.api());
-        let organization = profile.organization;
-        let events = EventHandler::new();
-        events.spawn(async move {
-            AppEvent::Connected(Box::new(
-                Session::open(&profile, &token, USER_AGENT)
-                    .await
-                    .map_err(color_eyre::Report::new),
-            ))
-        });
+    /// Builds the app for `profile`. `events` delivers the sign-in result as
+    /// [`AppEvent::Connected`].
+    pub fn new(profile: &Profile, events: EventHandler) -> Self {
         Self {
             running: true,
             events,
-            vault_base,
-            organization,
+            vault_base: web_vault_base(profile.endpoints.api()),
+            organization: profile.organization,
             session: None,
             projects: Vec::new(),
             screens: vec![Screen::Projects { selected: 0 }],
@@ -262,8 +250,8 @@ impl App {
     /// # Errors
     ///
     /// Fails when drawing fails, the event task dies, or login fails.
-    pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
-        let result = self.event_loop(&mut terminal).await;
+    pub async fn run(mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+        let result = self.event_loop(terminal).await;
         self.clear_clipboard();
         result
     }
@@ -1183,6 +1171,6 @@ fn step_project(projects: &[Project], current: Option<Uuid>, direction: Directio
 }
 
 /// A key that types its character: no modifier other than Shift.
-fn is_typing(key: KeyEvent) -> bool {
+pub(crate) fn is_typing(key: KeyEvent) -> bool {
     key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
 }

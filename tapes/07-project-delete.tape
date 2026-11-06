@@ -1,6 +1,6 @@
 Output proof/vhs/07-project-delete.gif
 Source tapes/settings.tape
-Type "./target/release/bas-tui --profile bas-tui-test" Enter
+Type "./target/release/bas tui --profile bas-tui-test" Enter
 Wait+Screen@30s /All secrets/
 Sleep 500ms
 Down Down Sleep 300ms

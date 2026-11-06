@@ -373,8 +373,10 @@ dependencies = [
  "arboard",
  "async-trait",
  "bas-core",
+ "bas-tui",
  "bitwarden",
  "clap",
+ "crossterm",
  "serde",
  "serde_json",
  "tokio",
@@ -409,7 +411,6 @@ version = "0.2.0"
 dependencies = [
  "arboard",
  "bas-core",
- "clap",
  "color-eyre",
  "crossterm",
  "futures",
