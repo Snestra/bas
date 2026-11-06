@@ -125,15 +125,7 @@ impl fmt::Debug for MachineToken {
 /// Fails when that source has no usable token. Never consults another source.
 pub fn load_token(profile: &Profile) -> Result<MachineToken, Error> {
     match profile.credential {
-        CredentialSource::Environment => {
-            let token = env::var(ACCESS_TOKEN_VAR).map_err(|_| {
-                Error::new(format!(
-                    "profile '{}' reads its token from {ACCESS_TOKEN_VAR}, which is not set",
-                    profile.name
-                ))
-            })?;
-            MachineToken::parse(SecretText::new(token))
-        }
+        CredentialSource::Environment => load_environment_token(&profile.name),
         CredentialSource::OsStore => {
             let token = store_entry(&profile.name)?
                 .get_password()
@@ -141,6 +133,20 @@ pub fn load_token(profile: &Profile) -> Result<MachineToken, Error> {
             MachineToken::parse(SecretText::new(token))
         }
     }
+}
+
+/// Loads the machine token from `BWS_ACCESS_TOKEN` for the named profile.
+///
+/// # Errors
+///
+/// Fails when the variable is not set or does not hold a machine token.
+pub fn load_environment_token(profile: &ProfileName) -> Result<MachineToken, Error> {
+    let token = env::var(ACCESS_TOKEN_VAR).map_err(|_| {
+        Error::new(format!(
+            "profile '{profile}' reads its token from {ACCESS_TOKEN_VAR}, which is not set"
+        ))
+    })?;
+    MachineToken::parse(SecretText::new(token))
 }
 
 /// Saves a machine token in the operating system credential store.

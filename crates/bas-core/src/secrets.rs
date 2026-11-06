@@ -22,7 +22,8 @@ use zeroize::Zeroize;
 
 use crate::Error;
 use crate::credential::{MachineToken, SecretText};
-use crate::profile::Profile;
+use crate::profile::{CredentialSource, Endpoints, Profile};
+use crate::reference::ProfileName;
 
 /// How an SDK call failed, derived without reading the upstream message body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +121,98 @@ impl fmt::Display for Failure {
 }
 
 impl std::error::Error for Failure {}
+
+/// Why the identity server did not sign the token in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignInFailure {
+    /// The identity server refused the token.
+    Refused,
+    /// No usable response arrived.
+    Unreachable,
+    /// The answer could not be used.
+    Failed,
+    /// The answer did not authenticate the token.
+    NotAuthenticated,
+    /// The answer named no organization.
+    NoOrganization,
+}
+
+impl SignInFailure {
+    fn error(self, name: &ProfileName, endpoints: &Endpoints) -> Error {
+        Error::new(match self {
+            Self::Refused => {
+                format!("Secrets Manager refused the machine token for profile '{name}'")
+            }
+            Self::Unreachable => format!(
+                "could not reach the identity endpoint {} for profile '{name}'",
+                endpoints.identity()
+            ),
+            Self::Failed => format!("authentication failed for profile '{name}'"),
+            Self::NotAuthenticated => {
+                format!("Secrets Manager did not authenticate profile '{name}'")
+            }
+            Self::NoOrganization => {
+                format!("the machine token for profile '{name}' names no organization")
+            }
+        })
+    }
+}
+
+/// Logs in at `endpoints` and returns the client with the organization the server named.
+async fn authenticate(
+    endpoints: &Endpoints,
+    token: &MachineToken,
+    user_agent: &str,
+) -> Result<(SecretsManagerClient, Uuid), SignInFailure> {
+    let client = SecretsManagerClient::new(Some(ClientSettings {
+        identity_url: endpoints.identity().to_owned(),
+        api_url: endpoints.api().to_owned(),
+        user_agent: user_agent.to_owned(),
+        device_type: DeviceType::SDK,
+        device_identifier: None,
+        bitwarden_client_version: None,
+        bitwarden_package_type: None,
+    }));
+    let mut request = AccessTokenLoginRequest {
+        access_token: token.expose().to_owned(),
+        state_file: None,
+    };
+    let result = client.auth().login_access_token(&request).await;
+    request.access_token.zeroize();
+    let authenticated = match result {
+        Ok(response) => response.authenticated,
+        Err(err) => {
+            return Err(match Failure::classify(&err) {
+                Failure::IdentityRejected | Failure::Status(400..=499) => SignInFailure::Refused,
+                Failure::Transport => SignInFailure::Unreachable,
+                _ => SignInFailure::Failed,
+            });
+        }
+    };
+    if !authenticated {
+        return Err(SignInFailure::NotAuthenticated);
+    }
+    let organization = client
+        .get_access_token_organization()
+        .map(Uuid::from)
+        .ok_or(SignInFailure::NoOrganization)?;
+    Ok((client, organization))
+}
+
+/// Refuses a token whose organization differs from the one the user named.
+fn check_organization(
+    name: &ProfileName,
+    found: Uuid,
+    expected: Option<Uuid>,
+) -> Result<(), Error> {
+    match expected {
+        Some(expected) if expected != found => Err(Error::new(format!(
+            "the machine token for profile '{name}' belongs to organization {found}, not the \
+             configured {expected}"
+        ))),
+        _ => Ok(()),
+    }
+}
 
 /// Secret metadata from the identifier listing, which carries no values.
 ///
@@ -321,61 +414,62 @@ impl Session {
         token: &MachineToken,
         user_agent: &str,
     ) -> Result<Self, Error> {
-        let name = &profile.name;
-        let client = SecretsManagerClient::new(Some(ClientSettings {
-            identity_url: profile.endpoints.identity().to_owned(),
-            api_url: profile.endpoints.api().to_owned(),
-            user_agent: user_agent.to_owned(),
-            device_type: DeviceType::SDK,
-            device_identifier: None,
-            bitwarden_client_version: None,
-            bitwarden_package_type: None,
-        }));
-        let mut request = AccessTokenLoginRequest {
-            access_token: token.expose().to_owned(),
-            state_file: None,
-        };
-        let result = client.auth().login_access_token(&request).await;
-        request.access_token.zeroize();
-        let authenticated = match result {
-            Ok(response) => response.authenticated,
-            Err(err) => {
-                return Err(match Failure::classify(&err) {
-                    Failure::IdentityRejected | Failure::Status(400..=499) => Error::new(format!(
-                        "Secrets Manager refused the machine token for profile '{name}'"
-                    )),
-                    Failure::Transport => Error::new(format!(
-                        "could not reach the identity endpoint {} for profile '{name}'",
-                        profile.endpoints.identity()
-                    )),
-                    _ => Error::new(format!("authentication failed for profile '{name}'")),
-                });
-            }
-        };
-        if !authenticated {
-            return Err(Error::new(format!(
-                "Secrets Manager did not authenticate profile '{name}'"
-            )));
-        }
-        let organization = client
-            .get_access_token_organization()
-            .map(Uuid::from)
-            .ok_or_else(|| {
-                Error::new(format!(
-                    "the machine token for profile '{name}' names no organization"
-                ))
-            })?;
-        if organization != profile.organization {
-            return Err(Error::new(format!(
-                "the machine token for profile '{name}' belongs to organization {organization}, \
-                 not the configured {}",
-                profile.organization
-            )));
-        }
+        let (client, organization) = authenticate(&profile.endpoints, token, user_agent)
+            .await
+            .map_err(|refusal| refusal.error(&profile.name, &profile.endpoints))?;
+        check_organization(&profile.name, organization, Some(profile.organization))?;
         Ok(Self {
             client,
             profile: profile.clone(),
         })
+    }
+
+    /// Signs in at the first deployment in `candidates` whose identity server accepts the
+    /// token, and learns the organization from the server's answer.
+    ///
+    /// A deployment that refuses the token passes the attempt to the next one. Any other
+    /// failure stops the search, because the token may belong to the unreachable one. The
+    /// session's profile is named `name`, uses `credential`, and is not saved.
+    ///
+    /// # Errors
+    ///
+    /// Fails when every candidate refuses the token, a candidate cannot be reached, or the
+    /// token belongs to another organization than `organization`, when one is given.
+    pub async fn sign_in(
+        name: &ProfileName,
+        candidates: &[Endpoints],
+        organization: Option<Uuid>,
+        credential: CredentialSource,
+        token: &MachineToken,
+        user_agent: &str,
+    ) -> Result<Self, Error> {
+        for (index, endpoints) in candidates.iter().enumerate() {
+            let (client, found) = match authenticate(endpoints, token, user_agent).await {
+                Ok(signed_in) => signed_in,
+                Err(SignInFailure::Refused) if index + 1 < candidates.len() => continue,
+                Err(SignInFailure::Refused) if candidates.len() > 1 => {
+                    let tried: Vec<&str> = candidates.iter().map(Endpoints::identity).collect();
+                    return Err(Error::new(format!(
+                        "Secrets Manager refused the machine token for profile '{name}' at {}; \
+                         check that you copied the whole token, or pass --server-url for a \
+                         self-hosted server",
+                        tried.join(" and ")
+                    )));
+                }
+                Err(refusal) => return Err(refusal.error(name, endpoints)),
+            };
+            check_organization(name, found, organization)?;
+            return Ok(Self {
+                client,
+                profile: Profile {
+                    name: name.clone(),
+                    organization: found,
+                    endpoints: endpoints.clone(),
+                    credential,
+                },
+            });
+        }
+        Err(Error::usage("no Secrets Manager endpoint to sign in to"))
     }
 
     /// The profile this session signed in for.
