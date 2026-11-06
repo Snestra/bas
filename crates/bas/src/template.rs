@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::output::Error;
-use crate::reference::{self, Binding};
+use bas_core::reference::{self, Binding};
 
 const HEADER: &str = "# bas reference template. Values are resolved only when `bas env run` starts a \
                       command.\n";

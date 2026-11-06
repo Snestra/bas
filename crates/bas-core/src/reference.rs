@@ -9,7 +9,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use crate::output::Error;
+use crate::Error;
 
 /// Scheme prefix of every reference.
 const SCHEME: &str = "bas://";
@@ -24,6 +24,8 @@ const MAX_PROFILE_NAME: usize = 64;
 pub struct ProfileName(String);
 
 impl ProfileName {
+    /// The validated name.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -87,7 +89,9 @@ pub fn parse_secret_id(raw: &str) -> Result<Uuid, Error> {
 /// can never redirect authentication.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SecretRef {
+    /// Configured profile that resolves the secret.
     pub profile: ProfileName,
+    /// Secret ID within that profile's organization.
     pub id: Uuid,
 }
 
@@ -121,6 +125,8 @@ impl Serialize for SecretRef {
 pub struct EnvName(String);
 
 impl EnvName {
+    /// The validated name.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -165,7 +171,9 @@ impl Display for EnvName {
 /// One `NAME=bas://<profile>/<secret-id>` environment binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
+    /// Environment variable that receives the value.
     pub name: EnvName,
+    /// Secret whose value the variable receives.
     pub reference: SecretRef,
 }
 

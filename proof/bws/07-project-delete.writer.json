@@ -1,0 +1,9 @@
+{
+  "writer_sees": [
+    "bas-tui-test"
+  ],
+  "get_deleted_project": {
+    "exit": 1,
+    "stderr": "Error: \n   0: Received error message from server: [404 Not Found] {\"object\":\"error\",\"message\":\"Resource not found.\",\"val"
+  }
+}

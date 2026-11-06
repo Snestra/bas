@@ -68,7 +68,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo doc --locked --no-deps
       - name: Build release executables
-        run: cargo build --locked --release --bin bas --example e2e
+        run: cargo build --locked --release --bin bas --bin bas-tui --example e2e
       - name: Package and check the extracted executable
         env:
           BUILD_OS: ${{ runner.os }}
@@ -76,21 +76,25 @@ jobs:
         run: |
           set -euo pipefail
           binary=bas
+          tui_binary=bas-tui
           e2e_binary=e2e
           root="$PWD"
           if [[ "$BUILD_OS" == Windows ]]; then
             binary=bas.exe
+            tui_binary=bas-tui.exe
             e2e_binary=e2e.exe
             root="$(cygpath -w "$PWD")"
           fi
           archive="bas-${BUILD_OS}-${BUILD_ARCH}.tar.gz"
           evidence="e2e-${BUILD_OS}-${BUILD_ARCH}"
           mkdir package extracted
-          cp "target/release/$binary" package/
+          cp "target/release/$binary" "target/release/$tui_binary" package/
           cp README.md package/
           tar -czf "$archive" -C package .
           tar -xzf "$archive" -C extracted
           cmp "target/release/$binary" "extracted/$binary"
+          cmp "target/release/$tui_binary" "extracted/$tui_binary"
+          "extracted/$tui_binary" --version
           "target/release/examples/$e2e_binary" offline \
             --bas "$root/extracted/$binary" \
             --artifacts "$root/$evidence" \

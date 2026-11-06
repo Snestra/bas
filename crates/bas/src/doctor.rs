@@ -5,10 +5,10 @@ use std::env;
 use ap_client::MemoryIdentityProvider;
 use bitwarden::secrets_manager::{ClientSettings, SecretsManagerClient};
 
-use crate::credential::{self, ACCESS_TOKEN_VAR};
 use crate::output::{Check, Status};
-use crate::profile::{Profile, Profiles};
-use crate::secrets::Session;
+use bas_core::credential::{self, ACCESS_TOKEN_VAR};
+use bas_core::profile::{Profile, Profiles};
+use bas_core::secrets::Session;
 
 /// Runs every offline check and returns the results in display order.
 ///
@@ -28,7 +28,7 @@ pub fn offline() -> Vec<Check> {
 pub async fn authenticated(profile: &Profile) -> Check {
     let label = "profile";
     let session = match credential::load_token(profile) {
-        Ok(token) => Session::open(profile, &token).await,
+        Ok(token) => Session::open(profile, &token, crate::USER_AGENT).await,
         Err(err) => Err(err),
     };
     match session {

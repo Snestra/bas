@@ -9,88 +9,37 @@
 //! authorizes nothing and is never rewritten.
 
 use std::collections::{BTreeSet, HashSet};
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use ap_client::IdentityFingerprint;
+use bas_core::lock::ConfigLock;
+use bas_core::profile::{self, Profiles};
+use bas_core::reference::ProfileName;
+use bas_core::{IdentityFingerprint, Uuid};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::output::{self, Error};
-use crate::profile::{self, Profiles};
-use crate::reference::ProfileName;
 
 const POLICY_FILE: &str = "grants.toml";
-
-/// Lock file shared by every `bas` process using one configuration directory. It is
-/// separate from the policy file because saving replaces that file.
-const LOCK_FILE: &str = "policy.lock";
 
 /// Schema version of `grants.toml`. Any other version authorizes nothing.
 const VERSION: u32 = 1;
 
-/// Exclusive hold on the policy lock, released on drop.
+/// Waits for the configuration lock, saying so on stderr when another process holds it.
 ///
-/// Policy and profile writes need one, and a listener holds one from its final
-/// authorization check until the SDK has handed that reply to the relay.
-#[derive(Debug)]
-pub struct PolicyLock {
-    _file: File,
-}
-
-impl PolicyLock {
-    /// Waits for the lock, saying so on stderr when another process holds it.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the lock file cannot be opened or locked.
-    pub fn acquire() -> Result<Self, Error> {
-        let file = open_lock()?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                output::write_error(
-                    "waiting for another bas process that is changing grants or profiles, or \
-                     delivering a secret",
-                );
-                file.lock().map_err(|_| lock_failed())?;
-            }
-            Err(TryLockError::Error(_)) => return Err(lock_failed()),
-        }
-        Ok(Self { _file: file })
+/// # Errors
+///
+/// Fails when the lock file cannot be opened or locked.
+pub fn acquire_lock() -> Result<ConfigLock, Error> {
+    if let Some(lock) = ConfigLock::try_acquire()? {
+        return Ok(lock);
     }
-
-    /// Takes the lock only when it is free.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the lock file cannot be opened or locked.
-    pub fn try_acquire() -> Result<Option<Self>, Error> {
-        let file = open_lock()?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(Self { _file: file })),
-            Err(TryLockError::WouldBlock) => Ok(None),
-            Err(TryLockError::Error(_)) => Err(lock_failed()),
-        }
-    }
-}
-
-fn lock_failed() -> Error {
-    Error::new("could not lock the bas policy; grants and profiles were not changed")
-}
-
-fn open_lock() -> Result<File, Error> {
-    let dir = profile::config_dir()?;
-    profile::create_private_dir(&dir).map_err(|_| lock_failed())?;
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(dir.join(LOCK_FILE)).map_err(|_| lock_failed())
+    output::write_error(
+        "waiting for another bas process that is changing grants or profiles, or delivering a \
+         secret",
+    );
+    Ok(ConfigLock::acquire()?)
 }
 
 /// Whether a grant still lets its device receive secrets.
@@ -263,7 +212,7 @@ impl Policy {
     /// # Errors
     ///
     /// Fails if durable completion cannot be confirmed. The file may already have changed.
-    fn save(&self, _lock: &PolicyLock) -> Result<(), Error> {
+    fn save(&self, _lock: &ConfigLock) -> Result<(), Error> {
         let failed = || {
             Error::new(format!(
                 "could not confirm a durable update to grant policy {}; inspect it before retrying",
@@ -289,7 +238,7 @@ impl Policy {
 /// Fails when the profile is not a direct profile, the device is not paired with it, or the
 /// policy cannot be read or written.
 pub fn add(
-    lock: &PolicyLock,
+    lock: &ConfigLock,
     name: &ProfileName,
     device: IdentityFingerprint,
     secrets: BTreeSet<Uuid>,
@@ -336,7 +285,7 @@ pub fn add(
 /// # Errors
 ///
 /// Fails when no grant has this ID or the policy cannot be read or written.
-pub fn revoke(lock: &PolicyLock, id: Uuid) -> Result<(Grant, Change), Error> {
+pub fn revoke(lock: &ConfigLock, id: Uuid) -> Result<(Grant, Change), Error> {
     let mut policy = Policy::load()?;
     let grant = policy
         .grants
@@ -357,7 +306,7 @@ pub fn revoke(lock: &PolicyLock, id: Uuid) -> Result<(Grant, Change), Error> {
 /// # Errors
 ///
 /// Fails when the policy cannot be read or written.
-pub fn revoke_profile(lock: &PolicyLock, name: &ProfileName) -> Result<usize, Error> {
+pub fn revoke_profile(lock: &ConfigLock, name: &ProfileName) -> Result<usize, Error> {
     let mut policy = Policy::load()?;
     let mut revoked = 0;
     for grant in &mut policy.grants {

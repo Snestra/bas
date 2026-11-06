@@ -3,22 +3,23 @@
 mod agent_access;
 mod approval;
 mod cli;
-mod credential;
 mod discover;
 mod doctor;
 mod execute;
 mod grant;
+mod input;
 mod output;
-mod profile;
-mod reference;
 mod save;
-mod secrets;
 mod template;
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use bas_core::credential::{self, MachineToken};
+use bas_core::profile::{Connection, CredentialSource, Endpoints, Profile, Profiles, RelayUrl};
+use bas_core::reference::{self, Binding, ProfileName, SecretRef, parse_secret_id};
+use bas_core::secrets::Session;
 use clap::Parser;
 use clap::error::ErrorKind;
 
@@ -29,13 +30,25 @@ use crate::cli::{
     AuthCommand, Cli, Command, CreateArgs, DoctorArgs, EnvCommand, FindArgs, GrantAddArgs,
     GrantCommand, GrantListArgs, ListenArgs, LoginArgs, UpdateArgs,
 };
-use crate::credential::{InputSource, MachineToken};
-use crate::grant::{Change, Grant, Policy, PolicyLock};
+use crate::grant::{Change, Grant, Policy};
+use crate::input::InputSource;
 use crate::output::{EXIT_USAGE, Error, FindReport, GrantReport, Receipt, Result, Status};
-use crate::profile::{Connection, CredentialSource, Endpoints, Profile, Profiles, RelayUrl};
-use crate::reference::{Binding, ProfileName, SecretRef, parse_secret_id};
-use crate::secrets::Session;
 use crate::template::Overwrite;
+
+/// User agent sent with every Secrets Manager request.
+const USER_AGENT: &str = concat!("bas/", env!("CARGO_PKG_VERSION"));
+
+/// Builds a current-thread async runtime for SDK calls.
+///
+/// # Errors
+///
+/// Fails when the operating system refuses the runtime's resources.
+fn runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| Error::new("could not start the async runtime"))
+}
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -118,7 +131,7 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Grant(GrantCommand::Revoke(args)) => {
             let id = parse_secret_id(&args.grant)
                 .map_err(|_| Error::usage("a grant ID is a hyphenated UUID"))?;
-            let lock = PolicyLock::acquire()?;
+            let lock = grant::acquire_lock()?;
             let (grant, change) = grant::revoke(&lock, id)?;
             drop(lock);
             if change == Change::AlreadyInPlace {
@@ -136,8 +149,8 @@ fn grant_add(args: GrantAddArgs) -> Result<ExitCode> {
         .secrets
         .iter()
         .map(|raw| parse_secret_id(raw))
-        .collect::<Result<BTreeSet<_>>>()?;
-    let lock = PolicyLock::acquire()?;
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let lock = grant::acquire_lock()?;
     let (grant, change) = grant::add(&lock, &name, device, secrets)?;
     drop(lock);
     if change == Change::AlreadyInPlace {
@@ -183,7 +196,7 @@ fn listen(args: ListenArgs) -> Result<ExitCode> {
         .allow
         .iter()
         .map(|raw| parse_secret_id(raw))
-        .collect::<Result<BTreeSet<_>>>()?;
+        .collect::<Result<BTreeSet<_>, _>>()?;
     let peer_name = args
         .peer_name
         .as_deref()
@@ -211,7 +224,7 @@ fn create(args: CreateArgs) -> Result<ExitCode> {
     save::check_key(&args.key)?;
     let project = parse_secret_id(&args.project)?;
     let profile = Profiles::load()?.get(&name)?;
-    let value = credential::read_secret(input_source(args.clipboard))?;
+    let value = input::read_secret(input_source(args.clipboard))?;
     let receipt = save::create(&profile, &args.key, project, &value)?;
     print_receipt(&receipt)
 }
@@ -219,7 +232,7 @@ fn create(args: CreateArgs) -> Result<ExitCode> {
 fn update(args: UpdateArgs) -> Result<ExitCode> {
     let reference: SecretRef = args.reference.parse()?;
     let profile = Profiles::load()?.get(&reference.profile)?;
-    let value = credential::read_secret(input_source(args.clipboard))?;
+    let value = input::read_secret(input_source(args.clipboard))?;
     let receipt = save::update(&profile, &reference, &value)?;
     print_receipt(&receipt)
 }
@@ -236,11 +249,12 @@ fn print_receipt(receipt: &Receipt) -> Result<ExitCode> {
 }
 
 fn cli_bindings(raw: &[String]) -> Result<Vec<Binding>> {
-    reference::parse_bindings(
+    let bindings = reference::parse_bindings(
         raw.iter()
             .enumerate()
             .map(|(index, text)| (format!("--env value {}", index + 1), text.as_str())),
-    )
+    )?;
+    Ok(bindings)
 }
 
 /// Returns only when the program could not be started.
@@ -272,14 +286,14 @@ fn login(args: LoginArgs) -> Result<ExitCode> {
     };
     login_target(&Profiles::load()?, &profile)?;
     let token = if args.stdin {
-        MachineToken::parse(credential::read_secret(InputSource::Stdin)?)?
+        MachineToken::parse(input::read_secret(InputSource::Stdin)?)?
     } else if args.clipboard {
-        MachineToken::parse(credential::read_secret(InputSource::Clipboard)?)?
+        MachineToken::parse(input::read_secret(InputSource::Clipboard)?)?
     } else {
         credential::load_token(&profile)?
     };
-    secrets::runtime()?.block_on(Session::open(&profile, &token))?;
-    let lock = PolicyLock::acquire()?;
+    runtime()?.block_on(Session::open(&profile, &token, USER_AGENT))?;
+    let lock = grant::acquire_lock()?;
     let mut profiles = Profiles::load()?;
     let previous = login_target(&profiles, &profile)?;
     if credential == CredentialSource::OsStore {
@@ -326,7 +340,7 @@ fn login_target(profiles: &Profiles, profile: &Profile) -> Result<Option<Profile
 fn status(name: &ProfileName) -> Result<ExitCode> {
     let profile = Profiles::load()?.get(name)?;
     let token = credential::load_token(&profile)?;
-    secrets::runtime()?.block_on(Session::open(&profile, &token))?;
+    runtime()?.block_on(Session::open(&profile, &token, USER_AGENT))?;
     writeln!(
         io::stdout().lock(),
         "profile '{name}' authenticated to organization {} at {} using the {}",
@@ -339,7 +353,7 @@ fn status(name: &ProfileName) -> Result<ExitCode> {
 }
 
 fn logout(name: &ProfileName) -> Result<ExitCode> {
-    let lock = PolicyLock::acquire()?;
+    let lock = grant::acquire_lock()?;
     let mut profiles = Profiles::load()?;
     match profiles.connection(name)? {
         Connection::Direct(profile) => {
@@ -416,8 +430,8 @@ fn find(args: FindArgs) -> Result<ExitCode> {
     }
     let profile = Profiles::load()?.get(&name)?;
     let token = credential::load_token(&profile)?;
-    let identifiers = secrets::runtime()?.block_on(async {
-        let session = Session::open(&profile, &token).await?;
+    let identifiers = runtime()?.block_on(async {
+        let session = Session::open(&profile, &token, USER_AGENT).await?;
         session.list_identifiers(project).await
     })?;
     drop(token);
@@ -450,7 +464,7 @@ fn doctor(args: DoctorArgs) -> Result<ExitCode> {
     if let Some(name) = args.profile {
         let name: ProfileName = name.parse()?;
         let profile = Profiles::load()?.get(&name)?;
-        checks.push(secrets::runtime()?.block_on(doctor::authenticated(&profile)));
+        checks.push(runtime()?.block_on(doctor::authenticated(&profile)));
     }
     output::write_checks(&mut io::stdout().lock(), &checks).map_err(stdout_failed)?;
     if checks.iter().any(|check| check.status == Status::Failed) {

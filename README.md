@@ -30,7 +30,7 @@ The `ci` workflow in `ci.yml` runs on demand, and the `release` workflow in `rel
 
 ## Install from a release
 
-Each [GitHub release](https://github.com/Snestra/bas/releases) publishes `bas-<OS>-<ARCH>.tar.gz` archives built by the `release` workflow on Linux, macOS, and Windows runners. Download the archive for your platform, extract `bas` (or `bas.exe`), and put it on your `PATH`. The archive contains only the executable and this README.
+Each [GitHub release](https://github.com/Snestra/bas/releases) publishes `bas-<OS>-<ARCH>.tar.gz` archives built by the `release` workflow on Linux, macOS, and Windows runners. Download the archive for your platform, extract `bas` (or `bas.exe`), and put it on your `PATH`. The archive contains `bas`, `bas-tui`, and this README. Run `bas-tui --profile <profile>` with a profile you created through `bas auth login` to manage that profile's secrets and projects in the terminal.
 
 ## Build and install
 

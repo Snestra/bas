@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::output::SecretSummary;
-use crate::reference::{ProfileName, SecretRef};
-use crate::secrets::Identifier;
+use bas_core::reference::{ProfileName, SecretRef};
+use bas_core::secrets::Identifier;
 
 /// Result of matching queries against secret keys.
 #[derive(Debug, Default)]
@@ -25,13 +25,13 @@ pub fn discover(
 ) -> Discovery {
     let mut key_counts: BTreeMap<String, usize> = BTreeMap::new();
     for identifier in &identifiers {
-        *key_counts.entry(identifier.key.clone()).or_default() += 1;
+        *key_counts.entry(identifier.key().to_owned()).or_default() += 1;
     }
     let lowered: Vec<String> = queries.iter().map(|query| query.to_lowercase()).collect();
     let mut hit = vec![false; queries.len()];
     let mut matches = Vec::new();
     for identifier in identifiers {
-        let key = identifier.key.to_lowercase();
+        let key = identifier.key().to_lowercase();
         let matched: Vec<String> = queries
             .iter()
             .zip(&lowered)
@@ -44,15 +44,15 @@ pub fn discover(
             .collect();
         if queries.is_empty() || !matched.is_empty() {
             let duplicate_key = key_counts
-                .get(&identifier.key)
+                .get(identifier.key())
                 .is_some_and(|count| *count > 1);
             matches.push(SecretSummary {
                 reference: SecretRef {
                     profile: profile.clone(),
-                    id: identifier.id,
+                    id: identifier.id(),
                 },
-                key: identifier.key,
-                project_ids: identifier.project_ids,
+                key: identifier.key().to_owned(),
+                project_ids: identifier.project_ids().to_vec(),
                 matched,
                 duplicate_key,
             });
