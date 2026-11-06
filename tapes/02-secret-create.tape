@@ -1,6 +1,6 @@
 Output proof/vhs/02-secret-create.gif
 Source tapes/settings.tape
-Type "./target/release/bas-tui --profile bas-tui-test" Enter
+Type "./target/release/bas tui --profile bas-tui-test" Enter
 Wait+Screen@30s /All secrets/
 Sleep 500ms
 Down Sleep 300ms

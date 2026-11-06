@@ -15,7 +15,7 @@ use crate::app::{
 };
 
 /// Shown in place of a hidden value. Fixed width, so it does not reveal the length.
-const HIDDEN: &str = "••••••••";
+pub(crate) const HIDDEN: &str = "••••••••";
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -408,7 +408,7 @@ fn help_lines() -> Vec<Line<'static>> {
     .collect()
 }
 
-fn panel(title: &str) -> Block<'static> {
+pub(crate) fn panel(title: &str) -> Block<'static> {
     Block::bordered()
         .title(format!(" {title} "))
         .border_type(BorderType::Rounded)

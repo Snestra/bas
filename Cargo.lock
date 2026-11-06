@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "bas"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ap-client",
  "ap-relay-client",
@@ -373,8 +373,10 @@ dependencies = [
  "arboard",
  "async-trait",
  "bas-core",
+ "bas-tui",
  "bitwarden",
  "clap",
+ "crossterm",
  "serde",
  "serde_json",
  "tokio",
@@ -385,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "bas-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ap-client",
  "apple-native-keyring-store",
@@ -405,11 +407,10 @@ dependencies = [
 
 [[package]]
 name = "bas-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "bas-core",
- "clap",
  "color-eyre",
  "crossterm",
  "futures",

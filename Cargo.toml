@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/bas-core", "crates/bas", "crates/bas-tui"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 bas-core = { path = "crates/bas-core" }
+bas-tui = { path = "crates/bas-tui" }
 ap-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }
 ap-relay-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36", default-features = false }
 ap-relay-protocol = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }
@@ -19,6 +20,7 @@ async-trait = "0.1"
 atomicwrites = "0.4.4"
 bitwarden = "2.1"
 clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29.0"
 dirs = "7"
 keyring-core = "1"
 serde = { version = "1", features = ["derive"] }

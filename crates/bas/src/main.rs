@@ -16,8 +16,12 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use bas_core::Uuid;
 use bas_core::credential::{self, MachineToken};
-use bas_core::profile::{Connection, CredentialSource, Endpoints, Profile, Profiles, RelayUrl};
+use bas_core::login::{self, DEFAULT_PROFILE, LoginRequest};
+use bas_core::profile::{
+    Connection, CredentialSource, EndpointFlags, Endpoints, Profiles, RelayUrl,
+};
 use bas_core::reference::{self, Binding, ProfileName, SecretRef, parse_secret_id};
 use bas_core::secrets::Session;
 use clap::Parser;
@@ -91,8 +95,8 @@ fn usage_error(err: &clap::Error) -> ExitCode {
 fn dispatch(command: Command) -> Result<ExitCode> {
     match command {
         Command::Auth(AuthCommand::Login(args)) => login(args),
-        Command::Auth(AuthCommand::Status(args)) => status(&args.profile.parse()?),
-        Command::Auth(AuthCommand::Logout(args)) => logout(&args.profile.parse()?),
+        Command::Auth(AuthCommand::Status(args)) => status(&profile_name(&args.profile)?),
+        Command::Auth(AuthCommand::Logout(args)) => logout(&profile_name(&args.profile)?),
         Command::Auth(AuthCommand::List) => list_profiles(),
         Command::Find(args) => find(args),
         Command::Run(args) => {
@@ -122,10 +126,19 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Doctor(args) => doctor(args),
         Command::Listen(args) => listen(args),
         Command::Pair(args) => {
-            let name: ProfileName = args.profile.parse()?;
-            let relay: RelayUrl = args.relay.parse()?;
+            let name = profile_name(&args.profile)?;
+            let relay: RelayUrl = args
+                .relay
+                .ok_or_else(|| {
+                    Error::usage(
+                        "missing --relay URL, the relay of a `bas listen` on another machine. \
+                         To sign in with a machine account token instead, run: bas auth login",
+                    )
+                })?
+                .parse()?;
             agent_access::pair(name, relay)
         }
+        Command::Tui(args) => tui(args.profile.as_deref()),
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
         Command::Grant(GrantCommand::Revoke(args)) => {
@@ -143,7 +156,7 @@ fn dispatch(command: Command) -> Result<ExitCode> {
 }
 
 fn grant_add(args: GrantAddArgs) -> Result<ExitCode> {
-    let name: ProfileName = args.profile.parse()?;
+    let name = profile_name(&args.profile)?;
     let device = grant::parse_device(&args.device)?;
     let secrets = args
         .secrets
@@ -163,11 +176,7 @@ fn grant_add(args: GrantAddArgs) -> Result<ExitCode> {
 }
 
 fn grant_list(args: &GrantListArgs) -> Result<ExitCode> {
-    let profile = args
-        .profile
-        .as_deref()
-        .map(str::parse::<ProfileName>)
-        .transpose()?;
+    let profile = args.profile.as_deref().map(profile_name).transpose()?;
     let policy = Policy::load()?;
     let grants: Vec<&Grant> = policy
         .grants()
@@ -190,7 +199,7 @@ fn print_grant(grant: &Grant) -> Result<ExitCode> {
 }
 
 fn listen(args: ListenArgs) -> Result<ExitCode> {
-    let name: ProfileName = args.profile.parse()?;
+    let name = profile_name(&args.profile)?;
     let relay: RelayUrl = args.relay.parse()?;
     let scope = args
         .allow
@@ -220,7 +229,7 @@ fn input_source(clipboard: bool) -> InputSource {
 }
 
 fn create(args: CreateArgs) -> Result<ExitCode> {
-    let name: ProfileName = args.profile.parse()?;
+    let name = profile_name(&args.profile)?;
     save::check_key(&args.key)?;
     let project = parse_secret_id(&args.project)?;
     let profile = Profiles::load()?.get(&name)?;
@@ -269,72 +278,120 @@ fn stdout_failed(_: io::Error) -> Error {
     Error::new("could not write to standard output")
 }
 
+/// Parses a profile name from the command line.
+///
+/// A hyphenated ID is a valid name, but people type a project or organization ID there by
+/// mistake, so it is refused with the commands they most likely wanted. The rejected value
+/// is never repeated.
+fn profile_name(raw: &str) -> Result<ProfileName> {
+    if Uuid::try_parse(raw).is_ok() {
+        return Err(Error::usage(
+            "that is an ID, not a profile name. A profile name is the name a profile got at \
+             sign-in, such as default. To sign in with a machine account token, run: bas auth \
+             login. To see your profiles, run: bas auth list",
+        ));
+    }
+    Ok(raw.parse()?)
+}
+
 fn login(args: LoginArgs) -> Result<ExitCode> {
-    let name: ProfileName = args.profile.parse()?;
-    let organization = parse_secret_id(&args.organization)?;
-    let endpoints = Endpoints::from_flags(&args.endpoint.into())?;
+    let name = profile_name(&args.profile)?;
+    let organization = args
+        .organization
+        .as_deref()
+        .map(parse_secret_id)
+        .transpose()?;
+    let flags = EndpointFlags::from(args.endpoint);
+    let endpoints = if flags == EndpointFlags::default() {
+        None
+    } else {
+        Some(Endpoints::from_flags(&flags)?)
+    };
     let credential = if args.from_env {
         CredentialSource::Environment
     } else {
         CredentialSource::OsStore
     };
-    let profile = Profile {
+    if !(args.stdin || args.clipboard || args.from_env || input::can_prompt()) {
+        return Err(Error::usage(
+            "no terminal to paste the token into; give it with --stdin, --clipboard, or \
+             --from-env",
+        ));
+    }
+    let request = LoginRequest {
         name: name.clone(),
         organization,
         endpoints,
         credential,
     };
-    login_target(&Profiles::load()?, &profile)?;
+    let previous = request.check(&Profiles::load()?)?;
     let token = if args.stdin {
         MachineToken::parse(input::read_secret(InputSource::Stdin)?)?
     } else if args.clipboard {
         MachineToken::parse(input::read_secret(InputSource::Clipboard)?)?
+    } else if args.from_env {
+        credential::load_environment_token(&name)?
     } else {
-        credential::load_token(&profile)?
+        MachineToken::parse(input::prompt_hidden(
+            "Paste the machine account access token and press Enter (input is hidden): ",
+        )?)?
     };
-    runtime()?.block_on(Session::open(&profile, &token, USER_AGENT))?;
+    let session = runtime()?.block_on(request.sign_in(previous.as_ref(), &token, USER_AGENT))?;
+    let profile = session.profile();
     let lock = grant::acquire_lock()?;
-    let mut profiles = Profiles::load()?;
-    let previous = login_target(&profiles, &profile)?;
-    if credential == CredentialSource::OsStore {
-        credential::store_token(&name, &token)?;
-    } else if previous.is_some_and(|previous| previous.credential == CredentialSource::OsStore) {
-        credential::delete_token(&name)?;
-    }
-    drop(token);
-    profiles.insert(profile.clone());
-    profiles.save(&lock)?;
+    login::save(&lock, profile, &token)?;
     drop(lock);
+    drop(token);
     writeln!(
         io::stdout().lock(),
-        "authenticated profile '{name}' for organization {organization} at {}; token source: {}",
+        "authenticated profile '{name}' for organization {} at {}; token source: {}",
+        profile.organization,
         profile.endpoints.api(),
         profile.credential
     )
     .map_err(stdout_failed)?;
+    output::write_error(&format!(
+        "next: run `bas tui --profile {name}` to browse your secrets, or `bas find --profile \
+         {name}` to list references"
+    ));
     Ok(ExitCode::SUCCESS)
 }
 
-/// Returns the existing profile `profile` would replace, refusing a remote profile or a
-/// change of organization or endpoint.
-fn login_target(profiles: &Profiles, profile: &Profile) -> Result<Option<Profile>> {
-    let name = &profile.name;
-    if profiles.remote(name).is_some() {
-        return Err(Error::new(format!(
-            "profile '{name}' is a remote profile; run `bas auth logout {name}` first"
-        )));
+/// Opens the terminal UI on a profile, or on its sign-in screen when the profile is new.
+fn tui(requested: Option<&str>) -> Result<ExitCode> {
+    let profiles = Profiles::load()?;
+    let name = match requested {
+        Some(raw) => profile_name(raw)?,
+        None => default_tui_profile(&profiles)?,
+    };
+    let start = if profiles.is_configured(&name) {
+        let profile = profiles.get(&name)?;
+        let token = credential::load_token(&profile)?;
+        bas_tui::Start::Open(Box::new(profile), token)
+    } else {
+        bas_tui::Start::SignIn(name)
+    };
+    bas_tui::run(start).map_err(|err| Error::new(format!("{err:#}")))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The profile `bas tui` opens without --profile: `default`, else the only direct profile,
+/// else a new `default` when no profile exists.
+fn default_tui_profile(profiles: &Profiles) -> Result<ProfileName> {
+    let default: ProfileName = DEFAULT_PROFILE.parse()?;
+    let names: Vec<ProfileName> = profiles.iter().map(|profile| profile.name).collect();
+    match names.as_slice() {
+        _ if profiles.is_configured(&default) => Ok(default),
+        [only] => Ok(only.clone()),
+        [] => Ok(default),
+        several => {
+            let listed: Vec<String> = several.iter().map(ToString::to_string).collect();
+            Err(Error::usage(format!(
+                "choose a profile: bas tui --profile NAME, where NAME is one of {}",
+                listed.join(", ")
+            )))
+        }
     }
-    let previous = profiles.find(name);
-    if let Some(previous) = &previous
-        && (previous.organization != profile.organization
-            || previous.endpoints != profile.endpoints)
-    {
-        return Err(Error::new(format!(
-            "profile '{name}' is bound to another organization or endpoint; run `bas auth \
-             logout {name}` first"
-        )));
-    }
-    Ok(previous)
 }
 
 fn status(name: &ProfileName) -> Result<ExitCode> {
@@ -423,7 +480,7 @@ fn list_profiles() -> Result<ExitCode> {
 }
 
 fn find(args: FindArgs) -> Result<ExitCode> {
-    let name: ProfileName = args.profile.parse()?;
+    let name = profile_name(&args.profile)?;
     let project = args.project.as_deref().map(parse_secret_id).transpose()?;
     if args.queries.iter().any(|query| query.trim().is_empty()) {
         return Err(Error::usage("a query must not be empty"));
@@ -462,7 +519,7 @@ fn find(args: FindArgs) -> Result<ExitCode> {
 fn doctor(args: DoctorArgs) -> Result<ExitCode> {
     let mut checks = doctor::offline();
     if let Some(name) = args.profile {
-        let name: ProfileName = name.parse()?;
+        let name = profile_name(&name)?;
         let profile = Profiles::load()?.get(&name)?;
         checks.push(runtime()?.block_on(doctor::authenticated(&profile)));
     }

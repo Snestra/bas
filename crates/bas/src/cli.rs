@@ -76,6 +76,19 @@ pub enum Command {
     /// configuration directory.
     #[command(subcommand)]
     Grant(GrantCommand),
+    /// Browse and edit secrets and projects in a terminal UI.
+    ///
+    /// Without --profile it opens the profile named default, or the only profile. When the
+    /// profile does not exist yet, it asks for a machine token and saves the profile as
+    /// `bas auth login` does.
+    Tui(TuiArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TuiArgs {
+    /// Direct profile to open, or to create on the sign-in screen.
+    #[arg(long)]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,9 +144,12 @@ pub struct GrantRevokeArgs {
 pub enum AuthCommand {
     /// Authenticate a machine token and save the profile only after it succeeds.
     ///
-    /// The token comes from piped stdin or the clipboard and is saved in the OS credential
-    /// store, or the profile reads BWS_ACCESS_TOKEN at every use with --from-env. Never
-    /// pass a token as an argument.
+    /// In a terminal without an input flag, bas asks for the token and hides what you
+    /// paste. --stdin and --clipboard read it from piped stdin or the clipboard. Either way
+    /// it is saved in the OS credential store, or with --from-env the profile reads
+    /// BWS_ACCESS_TOKEN at every use. Never pass a token as an argument. The organization
+    /// comes from Bitwarden's answer, and without an endpoint bas tries bitwarden.com, then
+    /// bitwarden.eu.
     Login(LoginArgs),
     /// Authenticate an existing profile and report its organization and endpoint.
     Status(ProfileArg),
@@ -169,18 +185,20 @@ pub struct PairArgs {
     /// Name of the remote profile to create, used in bas://PROFILE/SECRET-ID references.
     pub profile: String,
     /// Agent Access relay the listener uses: wss://HOST, or ws:// to a loopback address.
+    /// Required.
     #[arg(long, value_name = "URL")]
-    pub relay: String,
+    pub relay: Option<String>,
 }
 
 #[derive(Debug, Args)]
-#[command(group(ArgGroup::new("token").required(true).args(["stdin", "clipboard", "from_env"])))]
+#[command(group(ArgGroup::new("token").args(["stdin", "clipboard", "from_env"])))]
 pub struct LoginArgs {
     /// Profile name used in bas://PROFILE/SECRET-ID references.
+    #[arg(default_value = bas_core::login::DEFAULT_PROFILE)]
     pub profile: String,
-    /// Organization ID the machine token must belong to.
+    /// Organization ID the machine token must belong to. Default: the token's own.
     #[arg(long, value_name = "UUID")]
-    pub organization: String,
+    pub organization: Option<String>,
     #[command(flatten)]
     pub endpoint: EndpointArgs,
     /// Read the machine token from piped stdin and store it in the OS credential store.
@@ -196,7 +214,7 @@ pub struct LoginArgs {
 
 #[derive(Debug, Args)]
 pub struct EndpointArgs {
-    /// Hosted Bitwarden region.
+    /// Hosted Bitwarden region. Default: the profile's, else us, then eu.
     #[arg(long, value_enum)]
     pub region: Option<RegionArg>,
     /// Self-hosted server base URL; uses URL/api and URL/identity.

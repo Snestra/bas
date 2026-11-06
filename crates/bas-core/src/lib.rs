@@ -7,6 +7,7 @@
 pub mod credential;
 mod error;
 pub mod lock;
+pub mod login;
 pub mod profile;
 pub mod reference;
 pub mod secrets;

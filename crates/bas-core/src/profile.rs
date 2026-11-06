@@ -36,6 +36,11 @@ pub enum Region {
     Eu,
 }
 
+impl Region {
+    /// Hosted regions in the order a sign-in without an endpoint tries them.
+    pub const ALL: [Self; 2] = [Self::Us, Self::Eu];
+}
+
 /// Endpoint choices exactly as the user gave them, before validation.
 ///
 /// [`Endpoints::from_flags`] accepts exactly one choice: a region, a server URL, or both
@@ -72,19 +77,7 @@ impl Endpoints {
                 server_url: None,
                 api_url: None,
                 identity_url: None,
-            } => {
-                let (api, identity) = match region {
-                    Region::Us => (
-                        "https://api.bitwarden.com",
-                        "https://identity.bitwarden.com",
-                    ),
-                    Region::Eu => ("https://api.bitwarden.eu", "https://identity.bitwarden.eu"),
-                };
-                Self {
-                    api_url: parse_endpoint(api)?,
-                    identity_url: parse_endpoint(identity)?,
-                }
-            }
+            } => Self::hosted(*region),
             EndpointFlags {
                 region: None,
                 server_url: Some(server),
@@ -115,6 +108,22 @@ impl Endpoints {
             }
         };
         Ok(endpoints)
+    }
+
+    /// Endpoints of a hosted Bitwarden region.
+    #[must_use]
+    pub fn hosted(region: Region) -> Self {
+        let (api, identity) = match region {
+            Region::Us => (
+                "https://api.bitwarden.com",
+                "https://identity.bitwarden.com",
+            ),
+            Region::Eu => ("https://api.bitwarden.eu", "https://identity.bitwarden.eu"),
+        };
+        Self {
+            api_url: Url::parse(api).expect("hosted API URL is a valid constant"),
+            identity_url: Url::parse(identity).expect("hosted identity URL is a valid constant"),
+        }
     }
 
     /// API URL without a trailing slash, as the SDK expects.
