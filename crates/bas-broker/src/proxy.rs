@@ -3,18 +3,29 @@
 //! Only `CONNECT host:443` is accepted. A host without a policy rule gets a plain tunnel,
 //! so the broker never sees its traffic. For a rule host the broker ends the client's TLS
 //! with a certificate from its own authority, checks that the inner `Host` is the
-//! `CONNECT` host and that the method and path match `allow`, removes any client
-//! `Authorization`, sets the configured header, and opens its own TLS connection upstream,
-//! verified against the Mozilla roots.
+//! `CONNECT` host and that the request is allowed, removes any client `Authorization`,
+//! sets its own, and opens its own TLS connection upstream, verified against the Mozilla
+//! roots.
+//!
+//! Three kinds of rule host exist:
+//!
+//! - A `[secret.NAME]` host gets the stored value in the entry's header, for requests that
+//!   match `allow`.
+//! - With `[github]`, `api.github.com`, `uploads.github.com`, and `github.com` get an App
+//!   installation token for one repository. The repository comes from the request path
+//!   (`/repos/OWNER/REPO/...` on the API, `/OWNER/REPO.git/...` for git) or from the proxy
+//!   user, as in `HTTPS_PROXY=http://gh:OWNER%2FREPO@127.0.0.1:3128`. It must be listed in
+//!   `[[github.repo]]`. On `github.com` only git's HTTPS paths are allowed.
+//! - With `[tailscale]`, `api.tailscale.com` gets an OAuth access token, for requests that
+//!   match `api_allow`.
 
 use std::future::Future;
-use std::io::Write;
 use std::net::SocketAddr;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
-use bas_core::secrets::Session;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use hudsucker::certificate_authority::RcgenAuthority;
 use hudsucker::hyper::header::{AUTHORIZATION, HOST, HeaderValue, PROXY_AUTHORIZATION};
 use hudsucker::hyper::http::uri::Scheme;
@@ -27,7 +38,9 @@ use hudsucker::{Body, HttpContext, HttpHandler, Proxy, RequestOrResponse};
 use tokio::net::TcpListener;
 use zeroize::Zeroizing;
 
-use crate::policy::Policy;
+use crate::files::{create_dir, file_error, replace, write_new};
+use crate::policy::{self, GITHUB_HOSTS, Route};
+use crate::state::Broker;
 use crate::{Error, audit};
 
 const CA_KEY_FILE: &str = "ca.key";
@@ -106,14 +119,7 @@ impl Authority {
         }
         bundle.push_str("# bas broker proxy authority\n");
         bundle.push_str(&self.cert_pem);
-        if let Some(parent) = path.parent() {
-            create_dir(parent)?;
-        }
-        let mut staged = PathBuf::from(path);
-        staged.as_mut_os_string().push(".new");
-        let _ = std::fs::remove_file(&staged);
-        write_new(&staged, bundle.as_bytes(), 0o644)?;
-        std::fs::rename(&staged, path).map_err(|err| file_error("write", path, &err))
+        replace(path, bundle.as_bytes(), 0o644)
     }
 
     fn rcgen(&self) -> Result<RcgenAuthority, Error> {
@@ -132,41 +138,11 @@ impl Authority {
     }
 }
 
-fn file_error(action: &str, path: &Path, err: &std::io::Error) -> Error {
-    Error::new(format!("could not {action} {}: {err}", path.display()))
-}
-
-fn create_dir(dir: &Path) -> Result<(), Error> {
-    use std::os::unix::fs::DirBuilderExt;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|err| file_error("create", dir, &err))
-}
-
-/// Creates `path`, which must not exist, and sets `mode` after writing, because the
-/// service's umask would narrow a mode given at creation.
-fn write_new(path: &Path, contents: &[u8], mode: u32) -> Result<(), Error> {
-    let failed = |err: std::io::Error| file_error("write", path, &err);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(path)
-        .map_err(failed)?;
-    file.write_all(contents).map_err(failed)?;
-    file.set_permissions(std::fs::Permissions::from_mode(mode))
-        .map_err(failed)?;
-    file.sync_all().map_err(failed)
-}
-
 /// Binds the proxy port and returns the future that serves it.
 pub async fn start(
     addr: SocketAddr,
     authority: Authority,
-    policy: Arc<Policy>,
-    session: Session,
+    broker: Arc<Broker>,
 ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
     let listener = TcpListener::bind(addr)
         .await
@@ -176,8 +152,7 @@ pub async fn start(
         .with_ca(authority.rcgen()?)
         .with_rustls_connector(ring::default_provider())
         .with_http_handler(Injector {
-            policy,
-            session,
+            broker,
             tunnel: None,
         })
         .build()
@@ -194,16 +169,40 @@ pub async fn start(
 /// `CONNECT` also handles every request inside that tunnel, so `tunnel` is per tunnel.
 #[derive(Clone)]
 struct Injector {
-    policy: Arc<Policy>,
-    session: Session,
+    broker: Arc<Broker>,
     tunnel: Option<Arc<Tunnel>>,
 }
 
-/// A `CONNECT` to a rule host, with the header value fetched for it.
-struct Tunnel {
-    name: String,
-    host: String,
-    value: HeaderValue,
+/// A `CONNECT` to a rule host.
+enum Tunnel {
+    /// A `[secret.NAME]` host, with the header value fetched for it.
+    Secret {
+        name: String,
+        host: String,
+        value: HeaderValue,
+    },
+    /// A GitHub host, with the repository the proxy user claimed, if any.
+    Github { host: String, claim: Option<String> },
+    /// The Tailscale API.
+    Tailscale { host: String },
+}
+
+impl Tunnel {
+    fn host(&self) -> &str {
+        match self {
+            Self::Secret { host, .. } | Self::Github { host, .. } | Self::Tailscale { host } => {
+                host
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Secret { name, .. } => name,
+            Self::Github { .. } => "github",
+            Self::Tailscale { .. } => "tailscale",
+        }
+    }
 }
 
 impl HttpHandler for Injector {
@@ -216,10 +215,10 @@ impl HttpHandler for Injector {
             return self.connect(request).await;
         }
         match self.tunnel.clone() {
-            Some(tunnel) => self.inject(request, &tunnel),
+            Some(tunnel) => self.inject(request, &tunnel).await,
             None => reply(
                 StatusCode::FORBIDDEN,
-                "the bas proxy accepts only CONNECT to port 443\n",
+                "the bas proxy accepts only CONNECT to port 443\n".to_owned(),
             ),
         }
     }
@@ -234,55 +233,93 @@ impl HttpHandler for Injector {
 }
 
 impl Injector {
-    /// Accepts `CONNECT host:443`. For a rule host it fetches the secret now, so a failure
-    /// refuses the tunnel instead of each request in it.
+    /// Accepts `CONNECT host:443`. For a secret host it fetches the secret now, so a
+    /// failure refuses the tunnel instead of each request in it.
     async fn connect(&mut self, request: Request<Body>) -> RequestOrResponse {
         let Some(authority) = request.uri().authority() else {
-            return reply(StatusCode::BAD_REQUEST, "CONNECT needs host:port\n");
+            return reply(
+                StatusCode::BAD_REQUEST,
+                "CONNECT needs host:port\n".to_owned(),
+            );
         };
         if authority.port_u16() != Some(443) {
             return reply(
                 StatusCode::FORBIDDEN,
-                "the bas proxy accepts only CONNECT to port 443\n",
+                "the bas proxy accepts only CONNECT to port 443\n".to_owned(),
             );
         }
         let host = normalize_host(authority.host());
-        let policy = Arc::clone(&self.policy);
-        let Some((secret, rule)) = policy.for_host(&host) else {
-            return request.into();
-        };
-        let value = match self.session.get(secret.reference.id).await {
-            Ok(found) => found.into_value(),
-            Err(err) => {
-                tracing::warn!("could not read {} for {host}: {err}", secret.name);
-                return reply(
-                    StatusCode::BAD_GATEWAY,
-                    "the broker could not read the secret\n",
-                );
+        let claim = proxy_claim(&request);
+        let policy = self.broker.policy();
+        let tunnel = match policy.route(&host) {
+            None => {
+                if claim.is_some() && GITHUB_HOSTS.contains(&host.as_str()) {
+                    audit::deny_request("github", &host, "CONNECT", "", "no [github] table");
+                    return reply(
+                        StatusCode::FORBIDDEN,
+                        "the active policy has no [github] table, so the bas broker cannot \
+                         mint GitHub tokens\n"
+                            .to_owned(),
+                    );
+                }
+                return request.into();
             }
+            Some(Route::Secret(secret)) => {
+                let value = match self.broker.session.get(secret.reference.id).await {
+                    Ok(found) => found.into_value(),
+                    Err(err) => {
+                        tracing::warn!("could not read {} for {host}: {err:?}", secret.name);
+                        return reply(
+                            StatusCode::BAD_GATEWAY,
+                            "the broker could not read the secret\n".to_owned(),
+                        );
+                    }
+                };
+                let Some(value) = secret.rule.header_value(value.expose()) else {
+                    tracing::warn!("{} does not fit in an HTTP header value", secret.name);
+                    return reply(
+                        StatusCode::BAD_GATEWAY,
+                        "the secret is not a valid header value\n".to_owned(),
+                    );
+                };
+                Tunnel::Secret {
+                    name: secret.name.clone(),
+                    host,
+                    value,
+                }
+            }
+            Some(Route::Github(github)) => {
+                if let Some(repo) = &claim
+                    && !github.repos.contains_key(&repo.to_ascii_lowercase())
+                {
+                    audit::deny_request(
+                        "github",
+                        &host,
+                        "CONNECT",
+                        repo,
+                        "repository not in [github]",
+                    );
+                    return reply(
+                        StatusCode::FORBIDDEN,
+                        format!("the bas policy has no [[github.repo]] entry for {repo}\n"),
+                    );
+                }
+                Tunnel::Github { host, claim }
+            }
+            Some(Route::Tailscale(_)) => Tunnel::Tailscale { host },
         };
-        let Some(value) = rule.header_value(value.expose()) else {
-            tracing::warn!("{} does not fit in an HTTP header value", secret.name);
-            return reply(
-                StatusCode::BAD_GATEWAY,
-                "the secret is not a valid header value\n",
-            );
-        };
-        self.tunnel = Some(Arc::new(Tunnel {
-            name: secret.name.clone(),
-            host,
-            value,
-        }));
+        self.tunnel = Some(Arc::new(tunnel));
         request.into()
     }
 
-    /// Checks one request inside a rule host's tunnel and sets the policy header on it.
-    fn inject(&self, mut request: Request<Body>, tunnel: &Tunnel) -> RequestOrResponse {
+    /// Checks one request inside a rule host's tunnel and sets the credential on it.
+    async fn inject(&self, mut request: Request<Body>, tunnel: &Tunnel) -> RequestOrResponse {
         let method = request.method().as_str().to_owned();
         let path = request.uri().path().to_owned();
+        let host = tunnel.host();
         let refuse = |status: StatusCode, reason: &str| {
-            audit::deny_request(&tunnel.name, &tunnel.host, &method, &path, reason);
-            reply(status, "refused by bas policy\n")
+            audit::deny_request(tunnel.name(), host, &method, &path, reason);
+            reply(status, format!("refused by bas policy: {reason}\n"))
         };
         if request.uri().scheme() != Some(&Scheme::HTTPS) {
             return refuse(StatusCode::FORBIDDEN, "not TLS inside the tunnel");
@@ -293,32 +330,142 @@ impl Injector {
             .and_then(|host| host.to_str().ok())
             .map(|host| normalize_host(host.strip_suffix(":443").unwrap_or(host)));
         let target_host = request.uri().host().map(normalize_host);
-        if inner_host.as_deref() != Some(&tunnel.host)
-            || target_host.as_deref() != Some(&tunnel.host)
-        {
+        if inner_host.as_deref() != Some(host) || target_host.as_deref() != Some(host) {
             return refuse(StatusCode::FORBIDDEN, "Host differs from the CONNECT host");
         }
-        let Some((_, rule)) = self.policy.for_host(&tunnel.host) else {
-            return refuse(StatusCode::FORBIDDEN, "no rule for the host");
+        let policy = self.broker.policy();
+        let (header, value, audit_name) = match (tunnel, policy.route(host)) {
+            (Tunnel::Secret { name, value, .. }, Some(Route::Secret(secret)))
+                if secret.name == *name =>
+            {
+                if !secret.rule.allows(request.method(), request.uri()) {
+                    return refuse(StatusCode::FORBIDDEN, "method and path not in allow");
+                }
+                (secret.rule.header.clone(), value.clone(), name.clone())
+            }
+            (Tunnel::Github { claim, .. }, Some(Route::Github(github))) => {
+                let repo = match github_repo(host, &path, claim.as_deref()) {
+                    Ok(repo) => repo,
+                    Err(reason) => return refuse(StatusCode::FORBIDDEN, reason),
+                };
+                let Some(entry) = github.repos.get(&repo.to_ascii_lowercase()) else {
+                    return refuse(StatusCode::FORBIDDEN, "repository not in [github]");
+                };
+                let minted = match self.broker.minter.github(github, entry).await {
+                    Ok(minted) => minted,
+                    Err(err) => {
+                        audit::deny_request("github", host, &method, &path, &err.to_string());
+                        return reply(StatusCode::BAD_GATEWAY, format!("bas broker: {err}\n"));
+                    }
+                };
+                let text = if host == "github.com" {
+                    let basic = Zeroizing::new(format!("x-access-token:{}", minted.token.as_str()));
+                    format!("Basic {}", BASE64.encode(basic.as_bytes()))
+                } else {
+                    format!("Bearer {}", minted.token.as_str())
+                };
+                let Some(value) = policy::sensitive(&Zeroizing::new(text)) else {
+                    return reply(
+                        StatusCode::BAD_GATEWAY,
+                        "bas broker: unusable token\n".to_owned(),
+                    );
+                };
+                (AUTHORIZATION, value, format!("github:{}", entry.name))
+            }
+            (Tunnel::Tailscale { .. }, Some(Route::Tailscale(tailscale))) => {
+                if !tailscale.api_allow.allows(request.method(), request.uri()) {
+                    return refuse(StatusCode::FORBIDDEN, "method and path not in api_allow");
+                }
+                let minted = match self.broker.minter.tailscale(tailscale).await {
+                    Ok(minted) => minted,
+                    Err(err) => {
+                        audit::deny_request("tailscale", host, &method, &path, &err.to_string());
+                        return reply(StatusCode::BAD_GATEWAY, format!("bas broker: {err}\n"));
+                    }
+                };
+                let text = Zeroizing::new(format!("Bearer {}", minted.token.as_str()));
+                let Some(value) = policy::sensitive(&text) else {
+                    return reply(
+                        StatusCode::BAD_GATEWAY,
+                        "bas broker: unusable token\n".to_owned(),
+                    );
+                };
+                (AUTHORIZATION, value, "tailscale".to_owned())
+            }
+            _ => return refuse(StatusCode::FORBIDDEN, "the policy for the host changed"),
         };
-        if !rule.allows(request.method(), request.uri()) {
-            return refuse(StatusCode::FORBIDDEN, "method and path not in allow");
-        }
         let headers = request.headers_mut();
         headers.remove(AUTHORIZATION);
         headers.remove(PROXY_AUTHORIZATION);
-        headers.remove(&rule.header);
-        headers.insert(rule.header.clone(), tunnel.value.clone());
-        audit::inject(&tunnel.name, &tunnel.host, &method, &path);
+        headers.remove(&header);
+        headers.insert(header, value);
+        audit::inject(&audit_name, host, &method, &path);
         request.into()
     }
+}
+
+/// The repository a GitHub request is for: from the path when it names one, else from the
+/// proxy user. Both must agree when both exist.
+fn github_repo(host: &str, path: &str, claim: Option<&str>) -> Result<String, &'static str> {
+    let mut parts = path.trim_start_matches('/').splitn(3, '/');
+    let in_path = if host == "github.com" {
+        let owner = parts.next().unwrap_or_default();
+        let repo = parts.next().unwrap_or_default();
+        let rest = parts.next().unwrap_or_default();
+        let git = [
+            "info/refs",
+            "git-upload-pack",
+            "git-receive-pack",
+            "info/lfs/",
+        ]
+        .iter()
+        .any(|prefix| rest.starts_with(prefix));
+        if owner.is_empty() || repo.is_empty() || !git || policy::ambiguous_path(path) {
+            return Err("only git over HTTPS is allowed on github.com");
+        }
+        Some(format!(
+            "{owner}/{}",
+            repo.strip_suffix(".git").unwrap_or(repo)
+        ))
+    } else if parts.next() == Some("repos") {
+        match (parts.next(), parts.next()) {
+            (Some(owner), Some(rest)) if !owner.is_empty() => {
+                let repo = rest.split('/').next().unwrap_or_default();
+                (!repo.is_empty()).then(|| format!("{owner}/{repo}"))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    match (in_path, claim) {
+        (Some(path_repo), Some(claim)) if !path_repo.eq_ignore_ascii_case(claim) => {
+            Err("the path names another repository than the proxy user")
+        }
+        (Some(repo), _) => Ok(repo),
+        (None, Some(claim)) => Ok(claim.to_owned()),
+        (None, None) => {
+            Err("no repository: put it in the path or in the proxy user, as gh:OWNER%2FREPO")
+        }
+    }
+}
+
+/// The repository claimed in `Proxy-Authorization: Basic base64(user:OWNER/REPO)`.
+fn proxy_claim(request: &Request<Body>) -> Option<String> {
+    let header = request.headers().get(PROXY_AUTHORIZATION)?.to_str().ok()?;
+    let encoded = header.strip_prefix("Basic ")?;
+    let decoded = Zeroizing::new(BASE64.decode(encoded.trim()).ok()?);
+    let text = std::str::from_utf8(&decoded).ok()?;
+    let (_, repo) = text.split_once(':')?;
+    let repo = repo.replace("%2F", "/").replace("%2f", "/");
+    (!repo.is_empty()).then_some(repo)
 }
 
 fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
-fn reply(status: StatusCode, text: &'static str) -> RequestOrResponse {
+fn reply(status: StatusCode, text: String) -> RequestOrResponse {
     let mut response = Response::new(Body::from(text));
     *response.status_mut() = status;
     response.into()

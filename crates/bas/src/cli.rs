@@ -39,11 +39,13 @@ pub enum Command {
     /// binding to audit.log in BAS_STATE_DIR or the user state directory, and the line never
     /// holds a value. If the audit line can't be written, the program doesn't start.
     ///
-    /// With --with NAME, bas asks the bas broker (Linux only) for the value of the policy
-    /// entry NAME instead of reading Secrets Manager itself. The broker checks the caller's
-    /// uid and its policy, writes an audit entry to the system journal, and refuses names
-    /// whose delivery is not env. BAS_BROKER_SOCKET overrides the socket path
-    /// /run/bas/broker.sock.
+    /// With --with NAME (Linux only), the program never receives the value of the policy
+    /// entry NAME. The bas broker confirms that NAME is a proxy entry, and bas sets
+    /// HTTPS_PROXY, https_proxy, SSL_CERT_FILE, CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE,
+    /// NODE_EXTRA_CA_CERTS, and GIT_SSL_CAINFO so the program's HTTPS requests go through
+    /// the broker's proxy, which adds the credential for the entry's host. The broker
+    /// writes an audit entry to the system journal. BAS_BROKER_SOCKET overrides the socket
+    /// path /run/bas/broker.sock.
     Run(RunArgs),
     /// Write or run reference-only environment templates.
     #[command(subcommand)]
@@ -96,11 +98,109 @@ pub enum Command {
     /// Run the credential broker, normally as the systemd service bas-broker.service.
     ///
     /// The broker reads the machine token from the systemd credential bws, serves an HTTP
-    /// and JSON API on a unix socket to the uids in broker.toml, and runs an HTTPS proxy
-    /// that adds policy credentials to requests for policy hosts. It writes one journal
-    /// entry with BAS_AUDIT=1 per credential it hands out or adds. Linux only.
+    /// and JSON API on a unix socket to the uids in broker.toml, runs an HTTPS proxy that
+    /// adds policy credentials to requests for policy hosts, an ssh-agent that signs with
+    /// policy keys, and approval pages where a passkey on your phone approves changes. It
+    /// writes one journal entry with BAS_AUDIT=1 per credential use, change, or refusal.
+    /// Linux only.
     #[cfg(target_os = "linux")]
     Broker(BrokerArgs),
+    /// Propose a new proxy secret. You type its value on the approval page on your phone.
+    ///
+    /// The broker opens an approval and bas prints its URL, then waits. After the phone
+    /// approves, the broker creates the secret in Bitwarden, adds [secret.NAME] to the
+    /// active policy, and bas rewrites ~/.config/bas/policy.toml from the active policy.
+    /// The value never passes through this terminal. Linux only.
+    #[cfg(target_os = "linux")]
+    Add(AddArgs),
+    /// Rotate a secret: drop minted tokens at once, or replace a stored value from the phone.
+    ///
+    /// NAME is a [secret.NAME] entry, whose new value you type on the approval page, or
+    /// github or tailscale, whose cached tokens the broker drops so the next request mints
+    /// new ones. Linux only.
+    #[cfg(target_os = "linux")]
+    Rotate(RotateArgs),
+    /// Edit the policy proposal and ask your phone to approve it.
+    #[cfg(target_os = "linux")]
+    #[command(subcommand)]
+    Policy(PolicyCommand),
+    /// Show the broker's audit entries from the system journal.
+    ///
+    /// Reads `journalctl _SYSTEMD_UNIT=UNIT BAS_AUDIT=1 -o json`. Reading the system journal
+    /// needs membership in the adm or systemd-journal group. Linux only.
+    #[cfg(target_os = "linux")]
+    Audit(AuditArgs),
+    /// Manage the passkeys that approve broker requests.
+    #[cfg(target_os = "linux")]
+    #[command(subcommand)]
+    Passkey(PasskeyCommand),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Args)]
+pub struct AddArgs {
+    /// Policy name of the new entry, also the key of the new Bitwarden secret.
+    pub name: String,
+    /// Host the proxy adds the credential for, such as api.example.com.
+    #[arg(long)]
+    pub host: String,
+    /// Header the proxy sets.
+    #[arg(long, default_value = "Authorization")]
+    pub header: String,
+    /// Header value, with {secret} where the value goes.
+    #[arg(long, default_value = "Bearer {secret}")]
+    pub value: String,
+    /// Allowed request, as "METHOD /path/glob" where * matches anything. Repeat for more.
+    #[arg(long, required = true, value_name = "METHOD PATH")]
+    pub allow: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Args)]
+pub struct RotateArgs {
+    /// A [secret.NAME] entry, github, or tailscale.
+    pub name: String,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Subcommand)]
+pub enum PolicyCommand {
+    /// Open the proposal in $VISUAL or $EDITOR, send it, and wait for the phone.
+    ///
+    /// The proposal is policy.toml in the bas configuration directory (BAS_CONFIG_DIR, or
+    /// ~/.config/bas). When it does not exist, bas starts it from the active policy. After
+    /// you save and quit, bas shows the diff from the active policy and the approval URL,
+    /// then waits. After the phone approves, bas rewrites the proposal from the active
+    /// policy.
+    Edit,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Subcommand)]
+pub enum PasskeyCommand {
+    /// Ask an enrolled passkey to approve enrolling one more.
+    ///
+    /// The approving phone shows a one-time link, valid for 15 minutes. Open it on the
+    /// device that should hold the new passkey. The link never reaches this terminal.
+    Add,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Args)]
+pub struct AuditArgs {
+    /// Show entries since this time: a span such as 30m, 1h, or 2d, or anything
+    /// journalctl --since accepts.
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Show only entries about this policy name.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Broker unit. Defaults to BAS_BROKER_UNIT, or bas-broker.service.
+    #[arg(long)]
+    pub unit: Option<String>,
+    /// Print each entry as one JSON object per line.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -109,13 +209,14 @@ pub struct BrokerArgs {
     /// Unix socket for the API.
     #[arg(long, value_name = "PATH", default_value = bas_broker::protocol::DEFAULT_SOCKET)]
     pub socket: PathBuf,
-    /// Machine settings: allowed uids, the Secrets Manager profile, and the proxy address.
+    /// Unix socket for the ssh-agent.
+    #[arg(long, value_name = "PATH", default_value = bas_broker::protocol::DEFAULT_SSH_AGENT_SOCKET)]
+    pub ssh_agent_socket: PathBuf,
+    /// Machine settings: allowed uids, the Secrets Manager profile, and the addresses.
     #[arg(long, value_name = "PATH", default_value = "/etc/bas/broker.toml")]
     pub config: PathBuf,
-    /// Active policy.
-    #[arg(long, value_name = "PATH", default_value = "/var/lib/bas/policy.toml")]
-    pub policy: PathBuf,
-    /// Private directory for the proxy's certificate authority.
+    /// Private directory for the active policy, the passkeys, and the proxy's certificate
+    /// authority.
     #[arg(long, value_name = "PATH", default_value = "/var/lib/bas")]
     pub state_dir: PathBuf,
     /// File to write with the system roots and the proxy's certificate authority.
@@ -323,7 +424,8 @@ pub struct RunArgs {
     /// Binding NAME=bas://PROFILE/SECRET-ID. Repeat for more variables.
     #[arg(long = "env", value_name = "NAME=REFERENCE")]
     pub bindings: Vec<String>,
-    /// Policy name whose value the bas broker sets as variable NAME. Repeat for more.
+    /// Proxy entry of the broker's policy the program uses through the proxy. Repeat for
+    /// more. The program gets proxy settings, never the value.
     #[arg(long = "with", value_name = "NAME")]
     pub with: Vec<String>,
     /// Program and arguments, after --.

@@ -134,19 +134,158 @@ $ bas run --env "API_TOKEN=bas://work/<secret-id>" -- sh -c 'echo "$API_TOKEN"'
 [bas:API_TOKEN]
 ```
 
-### Values from the broker
+### The bas broker (Linux)
 
-On Linux, `bas run --with NAME` asks the bas broker for the value of the policy entry `NAME` instead of reading Secrets Manager itself. The broker is `bas broker`, run as a systemd service under its own user. It holds the machine token, checks the caller's uid against `/etc/bas/broker.toml`, hands out only entries of `/var/lib/bas/policy.toml` with `delivery = "env"`, and writes one journal entry with `BAS_AUDIT=1` per value. `bas run` masks the value in the program's output as it does for `--env`. `BAS_BROKER_SOCKET` replaces the socket path `/run/bas/broker.sock`.
+On Linux, `bas broker` holds the credentials so that no program you run, and no agent, ever sees a raw value. It runs as a systemd service under its own user, holds the Secrets Manager machine token, and checks each caller's uid against `allow-uids` in `/etc/bas/broker.toml`. It writes one system journal entry with `BAS_AUDIT=1` for each credential it uses, each change, and each refusal. `BAS_BROKER_SOCKET` replaces the socket path `/run/bas/broker.sock`.
 
 ```text
-$ bas run --with JINA_API_KEY -- sh -c 'echo "$JINA_API_KEY"'
-[bas:JINA_API_KEY]
+bas broker
+  /run/bas/broker.sock      HTTP and JSON API for the bas commands, peer uid checked
+  127.0.0.1:3128            HTTPS proxy that adds credentials for policy hosts
+  /run/bas/ssh-agent.sock   ssh-agent that signs with policy keys, peer uid checked
+  127.0.0.1:793             approval pages, published to your phone with tailscale serve
 ```
 
-Entries with `delivery = "proxy"` never leave the broker. A program sends its HTTPS requests through the broker's proxy on `127.0.0.1:3128` and trusts `/run/bas/ca-bundle.pem`, and the broker sets the entry's header on requests to the entry's host whose method and path match `allow`. Other hosts get a plain tunnel.
+The broker never hands a value to a program. Following the decision "send these keys through the proxy only", it refuses any policy entry with `delivery = "env"`. `bas run --with NAME` checks that `NAME` is a proxy entry, then sets `HTTPS_PROXY`, `https_proxy`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, and `GIT_SSL_CAINFO` in the program's environment. The proxy adds the credential to requests for the entry's host whose method and path match `allow`. Other hosts get a plain tunnel.
+
+```text
+$ bas run --with JINA_API_KEY -- sh -c 'env | grep -E "^(HTTPS_PROXY|SSL_CERT_FILE)="'
+HTTPS_PROXY=http://127.0.0.1:3128
+SSL_CERT_FILE=/run/bas/ca-bundle.pem
+```
+
+#### Policy
+
+The active policy is `policy.toml` in the broker's state directory, `/var/lib/bas`. It changes only after a passkey on your phone approves the change. Your copy, `~/.config/bas/policy.toml`, is a proposal.
+
+```toml
+version = 1
+
+[secret.JINA_API_KEY]
+ref = "bas://home/<secret-id>"
+delivery = "proxy"                       # the only delivery the broker accepts
+host = "api.jina.ai"
+header = "Authorization"
+value = "Bearer {secret}"
+allow = ["GET /v1/*", "POST /v1/*"]      # method and path globs; everything else is refused
+
+[ssh.git_signing]
+ref = "bas://home/<secret-id>"           # an ed25519 or rsa OpenSSH key without a passphrase
+use = ["sign-git"]                       # sign-git, auth, or both
+
+[github]
+app_id = 123456
+private_key = "bas://home/<secret-id>"  # the GitHub App's private key, PEM
+[[github.repo]]
+name = "OWNER/REPO"
+installation_id = 7654321
+permissions = { contents = "write", pull_requests = "write" }
+
+[tailscale]
+client_id = "bas://home/<secret-id>"
+client_secret = "bas://home/<secret-id>"
+scopes = ["devices:core:read"]
+api_allow = ["GET /api/v2/tailnet/-/devices"]
+```
+
+| Command | What it does |
+|---|---|
+| `bas policy edit` | Opens the proposal in `$VISUAL` or `$EDITOR`, sends it, prints the diff and the approval URL, and waits. After the phone approves, bas rewrites the proposal from the active policy. A policy the broker can't load is refused with its line number. |
+| `bas add NAME --host H --allow "GET /v1/*"` | Proposes a new proxy entry. `--header` defaults to `Authorization` and `--value` to `Bearer {secret}`. You type the value on the approval page, so it never passes through a terminal. After approval the broker creates the secret in the `project` of `broker.toml`, adds the entry, and bas prints the new reference. |
+| `bas rotate NAME` | For a `[secret.NAME]` entry, you type the new value on the approval page. For `github` or `tailscale`, the broker drops its cached tokens at once. |
+| `bas audit [--since 1h] [--name NAME]` | Prints the broker's journal entries. `--unit` or `BAS_BROKER_UNIT` names another unit, such as `bas-broker-dev`. Reading the system journal needs the `adm` or `systemd-journal` group. |
+| `bas passkey add` | Asks an enrolled passkey to approve one more. The approving phone shows a one-time link, valid for 15 minutes. |
+
+Each request that needs your phone waits up to 15 minutes. `GET /v1/approvals/ID?wait=60` on the socket reports `pending`, `approved`, `denied`, `expired`, or `failed`.
+
+#### SSH and commit signing
+
+The broker serves an ssh-agent with the `[ssh.NAME]` keys, which must be ed25519 or rsa keys without a passphrase. The agent refuses ECDSA keys, because their signing code isn't constant-time (RUSTSEC-2026-0387). A client can list keys and ask for signatures, and it can't add, remove, or export keys. A `sign-git` key signs only SSHSIG signatures in the `git` namespace, which is what `git commit -S` asks for. An `auth` key signs SSH logins.
 
 ```sh
-curl -x http://127.0.0.1:3128 --cacert /run/bas/ca-bundle.pem https://api.jina.ai/v1/embeddings ...
+export SSH_AUTH_SOCK=/run/bas/ssh-agent.sock
+ssh-add -L
+git config --global gpg.format ssh
+git config --global user.signingkey "key::$(ssh-add -L | grep bas:git_signing)"
+```
+
+#### GitHub and Tailscale tokens
+
+With `[github]`, the proxy adds a GitHub App installation token for one repository to requests for `api.github.com`, `uploads.github.com`, and `github.com`. The repository comes from the request path, or from the proxy user, as in `HTTPS_PROXY=http://gh:OWNER%2FREPO@127.0.0.1:3128`. It must be listed in `[[github.repo]]`. Tokens last an hour and are reused until five minutes before they expire. On `github.com` only git over HTTPS is allowed.
+
+With `[tailscale]`, the proxy adds an OAuth access token to requests for `api.tailscale.com` whose method and path match `api_allow`.
+
+Neither is in use yet, because the GitHub App and the Tailscale OAuth client don't exist. Until they do, the proxy fails each request with a message that names the cause, such as `bas broker: could not mint a GitHub token for OWNER/REPO: could not read the App's private key`. Without a `[github]` table, a request that claims a repository through the proxy user gets `403` with "the active policy has no [github] table".
+
+#### Approve from your phone
+
+The approval pages run on `127.0.0.1:793`, a port below 1024 that only the broker can take. Each page shows what was asked, the uid and pid the kernel reported, and for a policy change the diff. Approving runs a WebAuthn assertion with user verification required, against a challenge stored with that request only. An answer without a valid assertion gets `403`, and the request stays pending. Denying needs no passkey, because it grants nothing.
+
+Following the decision "A passkey that lives only on your phone", the broker refuses a passkey that reports itself as synced to other devices, both when you enroll it and at each approval. The passkeys an iPhone keeps in iCloud Keychain, and those in Google Password Manager, report themselves as synced, so the broker refuses them.
+
+`broker.toml` needs the approval origin and the project for `bas add`.
+
+```toml
+allow-uids = [1000]
+
+[profile]
+name = "home"
+organization = "<organization-id>"
+api-url = "https://api.bitwarden.com"
+identity-url = "https://identity.bitwarden.com"
+project = "<project-id>"
+
+[approvals]
+listen = "127.0.0.1:793"
+origin = "https://bas.taildfc6b2.ts.net"
+```
+
+To enroll your phone's passkey, run these as root on the broker machine, with no agent running.
+
+```sh
+# 1. Publish the approval pages as the Tailscale Service svc:bas.
+tailscale serve --service=svc:bas --https=443 127.0.0.1:793
+tailscale serve status            # approve the Service host in the admin console if asked
+
+# 2. Read the one-time enrollment link. The broker writes it while no passkey is enrolled.
+cat /var/lib/bas/enroll-url
+```
+
+Open the link on your phone, name the passkey, and tap Create passkey. The page says "Enrolled", and the broker deletes `enroll-url`. Then approve a first change from the phone, as yourself.
+
+```sh
+bas policy edit                   # add a line "# approved from my phone", save, and quit
+# open the printed URL on the phone and tap Approve with passkey
+bas audit --since 10m             # shows the enroll, request, approve, and policy entries
+```
+
+To check that a forged answer is refused after enrollment, run `bas policy edit` with a change again, and use the approval ID it prints in place of `ID` below. The reply is `403` with "no valid assertion", and the last command still says `pending`.
+
+```sh
+O='Origin: https://bas.taildfc6b2.ts.net'
+curl -s -X POST -H "$O" http://127.0.0.1:793/a/ID/begin > /dev/null
+curl -s -X POST -H "$O" -H 'content-type: application/json' \
+  -d '{"credential":{"id":"AA","rawId":"AA","type":"public-key","extensions":{},"response":{"authenticatorData":"AA","clientDataJSON":"AA","signature":"AA","userHandle":null}}}' \
+  http://127.0.0.1:793/a/ID/finish
+curl -s --unix-socket /run/bas/broker.sock http://localhost/v1/approvals/ID
+```
+
+#### Try the broker without installing it
+
+A transient unit runs the broker as a throwaway user and leaves nothing behind. Put the binary, `broker.toml`, and a first `seed.toml` policy in `/dev/shm/basdev`, readable by every user.
+
+```sh
+CRED="$(systemd-creds --user --name=bws decrypt ~/.local/share/bas/bws.cred - \
+  | sudo systemd-creds encrypt --name=bws - - | tr -d '\n')"
+sudo systemd-run --unit=bas-broker-dev --collect -p Type=notify -p DynamicUser=yes \
+  -p RuntimeDirectory=bas -p RuntimeDirectoryMode=0755 -p UMask=0077 \
+  -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p CapabilityBoundingSet=CAP_NET_BIND_SERVICE \
+  -p NoNewPrivileges=yes -p "SetCredentialEncrypted=bws:$CRED" \
+  -p "ExecStartPre=/bin/sh -c 'mkdir -p /run/bas/state && cp /dev/shm/basdev/seed.toml /run/bas/state/policy.toml'" \
+  /dev/shm/basdev/bas broker --config /dev/shm/basdev/broker.toml --state-dir /run/bas/state
+unset CRED
+BAS_BROKER_UNIT=bas-broker-dev bas audit
+sudo systemctl stop bas-broker-dev && rm -rf /dev/shm/basdev
 ```
 
 ### Reference templates

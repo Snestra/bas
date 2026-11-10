@@ -1,8 +1,9 @@
 //! Resolves selected references and starts a child process with them in its environment.
 //!
 //! Direct profiles retrieve from Secrets Manager. Remote profiles request each ID from
-//! their pinned listener. Names given with `--with` come from the bas broker. None falls
-//! back to another.
+//! their pinned listener. Neither falls back to the other. Names given with `--with` never
+//! reach the program as values: the bas broker confirms they are proxy entries, and the
+//! program gets the proxy settings instead.
 //!
 //! The argument vector reaches the program unchanged; no shell is involved. Bootstrap
 //! credentials are removed from the child environment. Injected values are masked in the
@@ -32,8 +33,8 @@ const EXIT_NOT_FOUND: u8 = 127;
 /// Exit status when the program exists but cannot be started, matching POSIX shells.
 const EXIT_CANNOT_START: u8 = 126;
 
-/// Resolves every binding and asks the broker for every name in `brokered`, records one
-/// audit line per variable, then runs the program with its output masked and exits with
+/// Resolves every binding, asks the broker to confirm every name in `brokered`, records
+/// one audit line per name, then runs the program with its output masked and exits with
 /// its status.
 ///
 /// Returns only when the program could not be run, with the reason.
@@ -43,24 +44,28 @@ pub fn run(
     program: &OsStr,
     arguments: &[OsString],
 ) -> Error {
-    let mut environment: Vec<(&EnvName, SecretText)> = Vec::new();
-    if !bindings.is_empty() {
+    let environment: Vec<(&EnvName, SecretText)> = if bindings.is_empty() {
+        Vec::new()
+    } else {
         match resolve(bindings) {
-            Ok(values) => {
-                environment.extend(bindings.iter().map(|binding| &binding.name).zip(values))
-            }
+            Ok(values) => bindings
+                .iter()
+                .map(|binding| &binding.name)
+                .zip(values)
+                .collect(),
             Err(err) => return err,
         }
-    }
+    };
     let mut sources: Vec<(&EnvName, Source<'_>)> = bindings
         .iter()
         .map(|binding| (&binding.name, Source::Reference(&binding.reference)))
         .collect();
     let socket;
+    let mut proxy_settings = Vec::new();
     if !brokered.is_empty() {
         socket = broker::socket();
-        match broker::fetch(&socket, brokered, program, arguments) {
-            Ok(values) => environment.extend(brokered.iter().zip(values)),
+        match broker::proxy_settings(&socket, brokered, program, arguments) {
+            Ok(settings) => proxy_settings = settings,
             Err(err) => return err,
         }
         sources.extend(brokered.iter().map(|name| (name, Source::Broker(&socket))));
@@ -81,6 +86,9 @@ pub fn run(
     for name in BOOTSTRAP_CREDENTIAL_VARS {
         command.env_remove(name);
     }
+    for (name, value) in &proxy_settings {
+        command.env(name, value);
+    }
     for (name, value) in &environment {
         command.env(name.as_str(), value.expose());
     }
@@ -89,31 +97,41 @@ pub fn run(
     launch(command, program, masker)
 }
 
-/// Values from the bas broker, which runs only on Linux.
+/// Proxy settings from the bas broker, which runs only on Linux.
 #[cfg(target_os = "linux")]
 mod broker {
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
 
-    use bas_broker::client;
+    use bas_broker::client::{self, Client};
     use bas_broker::protocol::RunRequest;
-    use bas_core::credential::SecretText;
     use bas_core::reference::EnvName;
 
     use crate::output::Error;
+
+    /// Variables that point common HTTPS clients at the proxy and its certificate bundle.
+    const PROXY_VARS: &[&str] = &["HTTPS_PROXY", "https_proxy"];
+    const BUNDLE_VARS: &[&str] = &[
+        "SSL_CERT_FILE",
+        "CURL_CA_BUNDLE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "GIT_SSL_CAINFO",
+    ];
 
     /// The broker socket.
     pub fn socket() -> PathBuf {
         client::socket_path()
     }
 
-    /// Asks the broker for every name and returns the values in the same order.
-    pub fn fetch(
+    /// Asks the broker to confirm that every name is a proxy entry, and returns the
+    /// variables that send the program's HTTPS through the proxy. No value is involved.
+    pub fn proxy_settings(
         socket: &Path,
         names: &[EnvName],
         program: &OsStr,
         arguments: &[OsString],
-    ) -> Result<Vec<SecretText>, Error> {
+    ) -> Result<Vec<(&'static str, String)>, Error> {
         let request = RunRequest {
             names: names.iter().map(|name| name.as_str().to_owned()).collect(),
             argv: std::iter::once(program)
@@ -124,20 +142,19 @@ mod broker {
                 .map(|dir| dir.display().to_string())
                 .unwrap_or_default(),
         };
-        let mut reply = crate::runtime()?
-            .block_on(client::run(socket, &request))
+        let reply = crate::runtime()?
+            .block_on(Client::new(socket).run(&request))
             .map_err(|err| Error::new(format!("not started: {err}")))?;
-        names
+        let mut settings: Vec<(&'static str, String)> = PROXY_VARS
             .iter()
-            .map(|name| {
-                let value = reply.env.remove(name.as_str()).ok_or_else(|| {
-                    Error::new(format!(
-                        "not started: the bas broker sent no value for {name}"
-                    ))
-                })?;
-                super::env_value(name, SecretText::new(value))
-            })
-            .collect()
+            .map(|name| (*name, reply.proxy.url.clone()))
+            .collect();
+        settings.extend(
+            BUNDLE_VARS
+                .iter()
+                .map(|name| (*name, reply.proxy.ca_bundle.clone())),
+        );
+        Ok(settings)
     }
 }
 
@@ -147,7 +164,6 @@ mod broker {
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
 
-    use bas_core::credential::SecretText;
     use bas_core::reference::EnvName;
 
     use crate::output::Error;
@@ -156,12 +172,12 @@ mod broker {
         PathBuf::new()
     }
 
-    pub fn fetch(
+    pub fn proxy_settings(
         _socket: &Path,
         _names: &[EnvName],
         _program: &OsStr,
         _arguments: &[OsString],
-    ) -> Result<Vec<SecretText>, Error> {
+    ) -> Result<Vec<(&'static str, String)>, Error> {
         Err(Error::usage(
             "--with needs the bas broker, which runs only on Linux; use --env instead",
         ))

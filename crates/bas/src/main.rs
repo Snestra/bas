@@ -3,6 +3,8 @@
 mod agent_access;
 mod approval;
 mod audit;
+#[cfg(target_os = "linux")]
+mod broker_commands;
 mod cli;
 mod discover;
 mod doctor;
@@ -105,7 +107,7 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Find(args) => find(args),
         Command::Run(args) => {
             let bindings = cli_bindings(&args.bindings)?;
-            let brokered = brokered_names(&args.with, &bindings)?;
+            let brokered = brokered_names(&args.with)?;
             run(&bindings, &brokered, &args.command)
         }
         Command::Env(EnvCommand::Write(args)) => {
@@ -150,14 +152,24 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Broker(args) => {
             bas_broker::serve(&bas_broker::Options {
                 socket: args.socket,
+                ssh_agent_socket: args.ssh_agent_socket,
                 config: args.config,
-                policy: args.policy,
                 state_dir: args.state_dir,
                 ca_bundle: args.ca_bundle,
             })
             .map_err(|err| Error::new(err.to_string()))?;
             Ok(ExitCode::SUCCESS)
         }
+        #[cfg(target_os = "linux")]
+        Command::Add(args) => broker_commands::add(args),
+        #[cfg(target_os = "linux")]
+        Command::Rotate(args) => broker_commands::rotate(&args.name),
+        #[cfg(target_os = "linux")]
+        Command::Policy(cli::PolicyCommand::Edit) => broker_commands::policy_edit(),
+        #[cfg(target_os = "linux")]
+        Command::Audit(args) => broker_commands::audit(args),
+        #[cfg(target_os = "linux")]
+        Command::Passkey(cli::PasskeyCommand::Add) => broker_commands::passkey_add(),
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
         Command::Grant(GrantCommand::Revoke(args)) => {
@@ -285,21 +297,17 @@ fn cli_bindings(raw: &[String]) -> Result<Vec<Binding>> {
     Ok(bindings)
 }
 
-/// Parses the `--with` names and refuses a variable given twice, in `--with` or `--env`.
-fn brokered_names(raw: &[String], bindings: &[Binding]) -> Result<Vec<EnvName>> {
+/// Parses the `--with` names and refuses a name given twice.
+fn brokered_names(raw: &[String]) -> Result<Vec<EnvName>> {
     let mut names: Vec<EnvName> = Vec::new();
     for (index, text) in raw.iter().enumerate() {
         let position = format!("--with value {}", index + 1);
         let name: EnvName = text
             .parse()
             .map_err(|err: bas_core::Error| Error::usage(format!("{position}: {err}")))?;
-        let taken = names.iter().any(|other| other.as_str() == name.as_str())
-            || bindings
-                .iter()
-                .any(|binding| binding.name.as_str() == name.as_str());
-        if taken {
+        if names.iter().any(|other| other.as_str() == name.as_str()) {
             return Err(Error::usage(format!(
-                "{position}: environment variable {name} is bound more than once"
+                "{position}: {name} is given more than once"
             )));
         }
         names.push(name);
