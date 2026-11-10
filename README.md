@@ -217,11 +217,11 @@ With `[tailscale]`, the proxy adds an OAuth access token to requests for `api.ta
 
 Neither is in use yet, because the GitHub App and the Tailscale OAuth client don't exist. Until they do, the proxy fails each request with a message that names the cause, such as `bas broker: could not mint a GitHub token for OWNER/REPO: could not read the App's private key`. Without a `[github]` table, a request that claims a repository through the proxy user gets `403` with "the active policy has no [github] table".
 
-#### Approve from your phone
+#### Approve with a YubiKey or a phone passkey
 
 The approval pages run on `127.0.0.1:793`, a port below 1024 that only the broker can take. Each page shows what was asked, the uid and pid the kernel reported, and for a policy change the diff. Approving runs a WebAuthn assertion with user verification required, against a challenge stored with that request only. An answer without a valid assertion gets `403`, and the request stays pending. Denying needs no passkey, because it grants nothing.
 
-Following the decision "A passkey that lives only on your phone", the broker refuses a passkey that reports itself as synced to other devices, both when you enroll it and at each approval. The passkeys an iPhone keeps in iCloud Keychain, and those in Google Password Manager, report themselves as synced, so the broker refuses them.
+Any passkey works, e.g. a YubiKey touched in the browser or a passkey on your phone, including one synced through iCloud Keychain. Each approval needs user verification on that device, which an agent on this machine cannot give.
 
 `broker.toml` needs the approval origin and the project for `bas add`.
 

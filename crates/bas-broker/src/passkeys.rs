@@ -1,9 +1,8 @@
 //! Enrolled passkeys and one-time enrollment links.
 //!
-//! The user chose "A passkey that lives only on your phone", so the broker refuses a
-//! passkey whose authenticator reports it as backed up or synced (the WebAuthn backup
-//! state flag), at enrollment and at every approval. A passkey in iCloud Keychain or Google
-//! Password Manager reports that flag.
+//! The user asked for convenience, so any passkey works: a YubiKey touched in the browser,
+//! or a passkey on the phone, synced or not. Each approval still needs user verification
+//! on the device, which an agent on this machine can't give.
 //!
 //! The passkeys' public keys live in `passkeys.json` in the state directory. While none is
 //! enrolled, the broker writes a one-time enrollment link to `enroll-url` there, which only
@@ -19,7 +18,7 @@ use std::time::{Duration, Instant};
 use bas_core::Uuid;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{
-    CreationChallengeResponse, Credential, Passkey, PasskeyAuthentication, PasskeyRegistration,
+    CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration,
     PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse, Url,
 };
 use webauthn_rs::{Webauthn, WebauthnBuilder};
@@ -30,9 +29,6 @@ use crate::{Error, audit};
 const PASSKEYS_FILE: &str = "passkeys.json";
 const ENROLL_FILE: &str = "enroll-url";
 /// Why a synced passkey is refused.
-const SYNCED: &str = "this passkey is synced to other devices; use one that lives only on \
-                      this phone, such as one saved with passkey sync turned off, or a \
-                      hardware security key";
 /// How long an enrollment link made by an approval stays usable.
 const LINK_LIFETIME: Duration = Duration::from_secs(15 * 60);
 
@@ -216,9 +212,6 @@ impl Passkeys {
             .webauthn
             .finish_passkey_registration(credential, &registration)
             .map_err(|err| Refused::Ceremony(format!("the passkey was not accepted: {err}")))?;
-        if Credential::from(passkey.clone()).backup_state {
-            return Err(Refused::Ceremony(SYNCED.to_owned()));
-        }
         if inner
             .file
             .passkeys
@@ -294,9 +287,6 @@ impl Passkeys {
             return Err(Refused::Ceremony(
                 "the phone did not verify the user".to_owned(),
             ));
-        }
-        if result.backup_state() {
-            return Err(Refused::Ceremony(SYNCED.to_owned()));
         }
         let mut inner = self.lock();
         let Some(stored) = inner
