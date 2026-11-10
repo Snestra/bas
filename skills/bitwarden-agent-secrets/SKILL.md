@@ -31,7 +31,7 @@ Use an explicit project filter when appropriate. The result contains metadata an
 bas run --env "API_TOKEN=bas://work/<secret-id>" -- your-command
 ```
 
-Choose a command that consumes the variable without displaying it. All references must resolve before the child starts. Arguments after `--` are passed directly. `BWS_ACCESS_TOKEN` and `AAC_TOKEN` are removed, but other inherited variables remain available.
+Choose a command that consumes the variable without displaying it. All references must resolve before the child starts. Arguments after `--` are passed directly. `BWS_ACCESS_TOKEN` and `AAC_TOKEN` are removed, but other inherited variables remain available. `bas` replaces each injected value of 4 or more bytes with `[bas:NAME]` in the child's stdout and stderr. Masking isn't a sandbox, so still pick a command that doesn't write the value to a file or another encoding. Every run appends one audit line per binding, without values.
 
 For repeatable bindings, use `bas env write <file> --env NAME=bas://profile/id`, then `bas env run <file> -- your-command`. Templates contain references only. Review whether their metadata can be committed.
 

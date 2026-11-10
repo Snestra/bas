@@ -2,12 +2,14 @@
 
 mod agent_access;
 mod approval;
+mod audit;
 mod cli;
 mod discover;
 mod doctor;
 mod execute;
 mod grant;
 mod input;
+mod mask;
 mod output;
 mod save;
 mod template;

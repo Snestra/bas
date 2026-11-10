@@ -4,17 +4,22 @@
 //! their pinned listener. Neither falls back to the other.
 //!
 //! The argument vector reaches the program unchanged; no shell is involved. Bootstrap
-//! credentials are removed from the child environment. Output redaction is not a sandbox,
-//! and a child can print what it receives.
+//! credentials are removed from the child environment. Injected values are masked in the
+//! child's stdout and stderr, but masking isn't a sandbox: a child can still write a value to
+//! a file, send it elsewhere, or print it in another encoding.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io;
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::thread;
 
 use uuid::Uuid;
 
 use crate::agent_access;
+use crate::audit;
+use crate::mask::Masker;
 use crate::output::Error;
 use bas_core::credential::{self, BOOTSTRAP_CREDENTIAL_VARS, SecretText};
 use bas_core::profile::{Connection, Profiles};
@@ -26,8 +31,8 @@ const EXIT_NOT_FOUND: u8 = 127;
 /// Exit status when the program exists but cannot be started, matching POSIX shells.
 const EXIT_CANNOT_START: u8 = 126;
 
-/// Resolves every binding, then replaces this process with the program (Unix) or runs it and
-/// exits with its status (Windows).
+/// Resolves every binding, records one audit line per binding, then runs the program with
+/// its output masked and exits with its status.
 ///
 /// Returns only when the program could not be run, with the reason.
 pub fn run(bindings: &[Binding], program: &OsStr, arguments: &[OsString]) -> Error {
@@ -35,6 +40,18 @@ pub fn run(bindings: &[Binding], program: &OsStr, arguments: &[OsString]) -> Err
         Ok(environment) => environment,
         Err(err) => return err,
     };
+    let masker = match Masker::new(
+        bindings
+            .iter()
+            .zip(&environment)
+            .map(|(binding, value)| (binding.name.as_str(), value.expose())),
+    ) {
+        Ok(masker) => masker,
+        Err(_) => return Error::new("not started: could not prepare output masking"),
+    };
+    if let Err(err) = audit::record(bindings, program) {
+        return err;
+    }
     let mut command = Command::new(program);
     command.args(arguments);
     for name in BOOTSTRAP_CREDENTIAL_VARS {
@@ -44,7 +61,8 @@ pub fn run(bindings: &[Binding], program: &OsStr, arguments: &[OsString]) -> Err
         command.env(binding.name.as_str(), value.expose());
     }
     drop(environment);
-    launch(command, program)
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    launch(command, program, masker)
 }
 
 /// Retrieves each referenced secret once and returns values in binding order.
@@ -136,20 +154,95 @@ fn start_error(program: &OsStr, err: &io::Error) -> Error {
     }
 }
 
-/// Replaces this process, so the program's exit status and signal handling are its own.
-#[cfg(unix)]
-fn launch(mut command: Command, program: &OsStr) -> Error {
-    use std::os::unix::process::CommandExt;
-    let err = command.exec();
-    start_error(program, &err)
+/// Starts the program and copies its stdout and stderr through `masker` on two threads.
+fn spawn_masked(
+    command: &mut Command,
+    program: &OsStr,
+    masker: Masker,
+) -> Result<(Child, Vec<thread::JoinHandle<()>>), Error> {
+    let mut child = command.spawn().map_err(|err| start_error(program, &err))?;
+    let masker = Arc::new(masker);
+    let mut copiers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let masker = Arc::clone(&masker);
+        copiers.push(thread::spawn(move || {
+            let _ = masker.copy(stdout, io::stdout());
+        }));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        copiers.push(thread::spawn(move || {
+            let _ = masker.copy(stderr, io::stderr());
+        }));
+    }
+    Ok((child, copiers))
 }
 
-/// Runs the program and exits with its status.
+/// Waits for the copy threads so no output is lost, then exits with `status`.
+fn finish(status: ExitStatus, copiers: Vec<thread::JoinHandle<()>>) -> ! {
+    for copier in copiers {
+        let _ = copier.join();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            std::process::exit(128 + signal);
+        }
+    }
+    std::process::exit(status.code().unwrap_or(1))
+}
+
+/// Runs the program with masked output and forwards SIGINT, SIGTERM, SIGHUP, and SIGQUIT to
+/// it, so `bas` exits only after the program does.
+#[cfg(unix)]
+fn launch(mut command: Command, program: &OsStr, masker: Masker) -> Error {
+    use rustix::process::{Pid, Signal, kill_process};
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let runtime = match crate::runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => return err,
+    };
+    let _context = runtime.enter();
+    let streams = (
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+        signal(SignalKind::quit()),
+    );
+    let (Ok(mut int), Ok(mut term), Ok(mut hup), Ok(mut quit)) = streams else {
+        return Error::new("not started: could not install signal handlers");
+    };
+    let (mut child, copiers) = match spawn_masked(&mut command, program, masker) {
+        Ok(started) => started,
+        Err(err) => return err,
+    };
+    let pid = Pid::from_child(&child);
+    let status = runtime.block_on(async move {
+        let mut waiter = tokio::task::spawn_blocking(move || child.wait());
+        loop {
+            let forward = tokio::select! {
+                status = &mut waiter => return status,
+                _ = int.recv() => Signal::INT,
+                _ = term.recv() => Signal::TERM,
+                _ = hup.recv() => Signal::HUP,
+                _ = quit.recv() => Signal::QUIT,
+            };
+            let _ = kill_process(pid, forward);
+        }
+    });
+    match status {
+        Ok(Ok(status)) => finish(status, copiers),
+        _ => Error::new("lost track of the program after it started"),
+    }
+}
+
+/// Runs the program with masked output and exits with its status.
 ///
 /// The console delivers Ctrl-C and Ctrl-Break to the child as well; registered handlers
 /// keep `bas` alive until the child exits so its status is reported.
 #[cfg(windows)]
-fn launch(mut command: Command, program: &OsStr) -> Error {
+fn launch(mut command: Command, program: &OsStr, masker: Masker) -> Error {
     let runtime = match crate::runtime() {
         Ok(runtime) => runtime,
         Err(err) => return err,
@@ -161,8 +254,12 @@ fn launch(mut command: Command, program: &OsStr) -> Error {
     let Ok(_handlers) = handlers else {
         return Error::new("could not install console control handlers");
     };
-    match command.status() {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-        Err(err) => start_error(program, &err),
+    let (mut child, copiers) = match spawn_masked(&mut command, program, masker) {
+        Ok(started) => started,
+        Err(err) => return err,
+    };
+    match child.wait() {
+        Ok(status) => finish(status, copiers),
+        Err(_) => Error::new("lost track of the program after it started"),
     }
 }

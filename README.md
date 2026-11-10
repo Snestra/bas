@@ -125,7 +125,14 @@ sequenceDiagram
     Cmd-->>Agent: output and exit status
 ```
 
-`bas` removes `BWS_ACCESS_TOKEN` and `AAC_TOKEN` from the environment of the program, but it doesn't sandbox the program. The program can print, copy, or send any injected value. It also inherits every other variable in your environment, so pick the command with care.
+`bas` removes `BWS_ACCESS_TOKEN` and `AAC_TOKEN` from the environment of the program. It also replaces each injected value of 4 or more bytes with `[bas:NAME]` in the program's stdout and stderr, so a value doesn't reach an agent transcript by accident. Masking doesn't sandbox the program, because the program can still write a value to a file, send it over the network, or print it in another encoding. The program also inherits every other variable in your environment, so pick the command with care.
+
+Before the program starts, `bas` appends one JSON line per binding to `audit.log`. The line holds the time, the variable name, the reference, the program name, the working directory, and the process ID, and it never holds a value. The log lives in `$BAS_STATE_DIR`, or in a `bas` directory inside the user state directory. If `bas` can't write the line, the program doesn't start.
+
+```text
+$ bas run --env "API_TOKEN=bas://work/<secret-id>" -- sh -c 'echo "$API_TOKEN"'
+[bas:API_TOKEN]
+```
 
 ### Reference templates
 

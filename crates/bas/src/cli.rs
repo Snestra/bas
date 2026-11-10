@@ -32,8 +32,12 @@ pub enum Command {
     /// the program does not start. References to a remote profile are requested one by one
     /// from its paired listener, and each needs approval or an exact grant there; a remote failure never falls
     /// back to a machine token. Arguments after -- reach the program unchanged, without a
-    /// shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its environment. The program
-    /// can still print what it receives.
+    /// shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its environment. Each injected
+    /// value of 4 or more bytes is replaced with [bas:NAME] in the program's stdout and
+    /// stderr. Masking isn't a sandbox, because the program can still write a value to a
+    /// file or send it elsewhere. Before the program starts, bas appends one JSON line per
+    /// binding to audit.log in BAS_STATE_DIR or the user state directory, and the line never
+    /// holds a value. If the audit line can't be written, the program doesn't start.
     Run(RunArgs),
     /// Write or run reference-only environment templates.
     #[command(subcommand)]

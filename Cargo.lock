@@ -367,6 +367,7 @@ dependencies = [
 name = "bas"
 version = "0.3.0"
 dependencies = [
+ "aho-corasick",
  "ap-client",
  "ap-relay-client",
  "ap-relay-protocol",
@@ -376,8 +377,11 @@ dependencies = [
  "bas-core",
  "bas-tui",
  "bitwarden",
+ "chrono",
  "clap",
  "crossterm",
+ "dirs",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "tokio",
