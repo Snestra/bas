@@ -271,7 +271,12 @@ async fn run_request(
     let claimed_argv = serde_json::to_string(&request.argv).unwrap_or_default();
     let policy = broker.policy();
     for name in &request.names {
-        if policy.secret(name).is_none() {
+        let known = match name.as_str() {
+            "tailscale" => policy.tailscale().is_some(),
+            "github" => policy.github().is_some(),
+            _ => policy.secret(name).is_some(),
+        };
+        if !known {
             audit::deny_name(name, peer, &claimed_argv, "not a proxy entry of the policy");
             return refusal(StatusCode::FORBIDDEN, "denied", Some(name));
         }
