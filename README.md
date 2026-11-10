@@ -2,7 +2,7 @@
 
 # Bitwarden Agent Secrets
 
-`bas` lets a coding agent use secrets from Bitwarden Secrets Manager through references of the form `bas://<profile>/<secret-id>`, so the values stay out of the agent's commands and transcript. On Linux, the `bas` broker goes further and holds every credential under a separate system user, so no program you run, and no agent, can read a raw value.
+`bas` lets a coding agent use secrets from Bitwarden Secrets Manager through references of the form `bas://<profile>/<secret-id>`, so the values stay out of the agent's commands and transcript. On Linux, the `bas` broker holds the credentials in its policy under a separate system user and adds them to allowed requests, so the programs you run, including agents, get no raw values on a host you have locked down.
 
 The documentation is at <https://snestra.github.io/bas/>.
 

@@ -40,7 +40,7 @@ $ bas run --with NOPE -- true
 bas: not started: the bas broker denied NOPE: it is not a proxy entry of the active policy
 ```
 
-`bas run --env NAME=bas://...` still works on a broker host, but it needs a direct profile with its own machine token, and it puts the value in the program's environment. A locked-down broker host has no such profile.
+`bas run --env NAME=bas://...` still works on a broker host, with a direct or remote profile, and it puts the value in the program's environment. Remove direct profiles and remote pairings on a host where agents must not receive raw values.
 
 ## Add a new API key
 

@@ -28,7 +28,7 @@ flowchart LR
 
 The agent can do anything the policy allows, as often as it likes, while the broker runs. For example, with a GitHub App that has `contents = "write"`, it can push branches and open pull requests on the listed repositories. Branch protection rules and required reviews on GitHub still apply to the App.
 
-The agent can also ask for changes. It can run `bas policy edit`, `bas add`, or `bas rotate`, and the request waits for your passkey. Read each diff on the approval page before you approve it, because the page shows what the broker will do, and the request's process ID and user ID tell you which process asked.
+The agent can also ask for changes. It can run `bas policy edit`, `bas add`, or `bas rotate`, and the request waits for your passkey. Read each diff on the approval page before you approve the request. The page shows the change and the process ID and user ID of the process that asked.
 
 The agent can deny a pending request, because denying needs no passkey. A denial grants nothing, so the worst case is that you have to ask again.
 

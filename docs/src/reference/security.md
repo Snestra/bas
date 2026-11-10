@@ -62,4 +62,6 @@ The advisory check with `cargo-deny` passes with the exceptions that `deny.toml`
 |---|---|---|
 | `RUSTSEC-2023-0071` | The RSA crate in the Bitwarden SDK | No patched RSA release exists, so the finding stays open |
 | `RUSTSEC-2026-0459` | Bundled SQLite in the Bitwarden SDK | `bas` opens no SQLite file |
-| `RUSTSEC-2026-0387` | `crypto-bigint`, used for ECDSA by the ssh-agent library | The broker's ssh-agent refuses ECDSA keys | `cargo deny check licenses` fails, because `deny.toml` doesn't list any allowed licenses yet. The `bas` source is under the MIT license.
+| `RUSTSEC-2026-0387` | `crypto-bigint`, used for ECDSA by the ssh-agent library | The broker's ssh-agent refuses ECDSA keys |
+
+`cargo deny check licenses` fails, because `deny.toml` doesn't list any allowed licenses yet. The `bas` source is under the MIT license.

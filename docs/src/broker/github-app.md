@@ -94,7 +94,7 @@ on(request to a GitHub host)
   add a token for the one repository only
 ```
 
-A request with no repository, such as `gh api user`, is refused. Commands that need your own account, such as creating a gist or a repository under your name, don't work through the broker.
+When a request path names no repository, the proxy uses the repository that the `gh` shim names for the current directory, and without either one it refuses the request. Endpoints that need a user token, such as `gh api user`, fail, because GitHub refuses installation tokens there. Commands that need your own account, such as creating a gist or a repository under your name, don't work through the broker.
 
 ## git over HTTPS
 

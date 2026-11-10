@@ -1,7 +1,7 @@
 # /etc/bas/broker.toml, owned by root with mode 0644. Settings for this machine only.
 # Replace each <placeholder> before you start the broker.
 
-# Unix user IDs that may use the broker socket, the proxy, and the ssh-agent.
+# Unix user IDs that may use the broker socket and the ssh-agent. The proxy listens on loopback and doesn't check the caller.
 # Run `id -u` as your own user to find yours.
 allow-uids = [1000]
 

@@ -6,7 +6,7 @@
 
 ## Two ways to use bas
 
-You can use `bas` directly, or you can run the `bas` broker on a Linux machine. With direct access, `bas run` reads each referenced secret and starts the program with the values in its environment. The program, and any agent that controls it, can read the values. With the broker, a separate system user holds every credential, and the program gets only proxy settings, an ssh-agent socket, and short-lived tokens that the broker adds to its requests. No program you run, and no agent, can read a raw value.
+You can use `bas` directly, or you can run the `bas` broker on a Linux machine. With direct access, `bas run` reads each referenced secret and starts the program with the values in its environment. The program, and any agent that controls it, can read the values. With the broker, a separate system user holds every credential, and the program gets only proxy settings, an ssh-agent socket, and short-lived tokens that the broker adds to its requests. On a host you have locked down, as [Lock down the host](broker/lock-down.md) describes, no program you run can read a raw value, as long as the policy hosts don't send credentials back in their responses.
 
 ```mermaid
 flowchart LR

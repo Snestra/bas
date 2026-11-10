@@ -1,6 +1,6 @@
 # Install the broker
 
-The install puts one program, one systemd unit, and a few root-owned files on the machine, and it seals the machine token so that only the broker's service can read it. The files come from `contrib/linux/` in the repository. Run every step as root, from a console or SSH session where no agent is running, so no agent sees the token or the enrollment link.
+The install puts one program, one systemd unit, and a few root-owned files on the machine, and it seals the machine token so that only the broker's service can read it. The files come from `contrib/linux/` in the repository. Run these steps as your normal user, from a console or SSH session where no agent is running, so no agent sees the token or the enrollment link. Commands that change system files use `sudo`.
 
 ```text
 contrib/linux/                      installed as
@@ -221,6 +221,7 @@ git signs a commit by running `ssh-keygen -Y sign`, which uses `SSH_AUTH_SOCK` a
 
 ```sh
 sudo git config --system gpg.ssh.program /usr/local/lib/bas/shims/ssh-keygen
+install -d -m 0700 ~/.ssh
 SSH_AUTH_SOCK=/run/bas/ssh-agent.sock ssh-add -L | grep 'bas:git_signing' > ~/.ssh/git_signing.pub
 git config --global gpg.format ssh
 git config --global user.signingkey ~/.ssh/git_signing.pub

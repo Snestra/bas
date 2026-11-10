@@ -9,7 +9,9 @@ Download the archive for your platform from the [releases page](https://github.c
 ```sh
 tar -xzf bas-Linux-X64.tar.gz
 command -v bas || echo "the name bas is free"
+install -d -m 0755 ~/.local/bin
 install -m 0755 bas ~/.local/bin/bas
+export PATH="$HOME/.local/bin:$PATH"
 bas --version
 ```
 

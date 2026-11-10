@@ -9,7 +9,7 @@ Use `bas` for Bitwarden Secrets Manager. Don't use Bitwarden Password Manager, a
 
 ## Check for a broker first
 
-On a Linux host with the `bas` broker, you can never get a raw value, and you don't need one. Check for the broker with the command below.
+On a Linux host with the `bas` broker, use the credentials in its policy without asking for their raw values. Check for the broker with the command below.
 
 ```sh
 test -S /run/bas/broker.sock && echo "broker host"
@@ -47,7 +47,7 @@ bas find --profile work API --json
 bas run --env "API_TOKEN=bas://work/<secret-id>" -- your-command
 ```
 
-`bas find` returns references and metadata, never values. Treat an unmatched query as unresolved, and don't guess a secret ID. Every reference must resolve before the program starts. `bas run` removes `BWS_ACCESS_TOKEN` and `AAC_TOKEN`, replaces each injected value of 4 or more bytes with `[bas:NAME]` in the program's output, and writes one audit line per binding without the value. The program can still read the value, so choose a command that uses it without showing it.
+`bas find` returns references and metadata, never values. Treat an unmatched query as unresolved, and don't guess a secret ID. Every reference must resolve before the program starts. `bas run` removes `BWS_ACCESS_TOKEN` and `AAC_TOKEN` from the program's environment. It replaces each injected value of 4 or more bytes with `[bas:NAME]` in the program's output, and it writes one audit line per binding without the value. The program can still read the value, so choose a command that uses it without showing it.
 
 For repeated bindings, use `bas env write <file> --env NAME=bas://profile/id` and `bas env run <file> -- command`. A template holds references only.
 

@@ -1,6 +1,6 @@
 # How the broker works
 
-The `bas` broker keeps every credential away from the programs you run as your own user, including coding agents. It runs as a systemd service under a separate system user called `bas`, and it is the only process that holds the Secrets Manager machine token or any secret value. Your programs use the credentials through the broker, and they never receive the values.
+The `bas` broker runs as a systemd service under a separate system user called `bas`. It holds the credentials in its policy and uses them for your programs, including coding agents, without handing the values to them. Keeping values from agents also needs the host changes in [Lock down the host](lock-down.md), such as removing old profiles and passwordless `sudo`.
 
 The broker runs on Linux with systemd only. On macOS and Windows, use direct access, as [macOS and Windows](../platforms.md) explains.
 
