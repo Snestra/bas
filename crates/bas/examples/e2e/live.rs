@@ -501,6 +501,45 @@ pub fn run(runner: &mut Runner) -> Result<(), E2eError> {
     scenario.dir = runner.scratch("live_direct")?;
     runner.finish_case("live_prerequisites", CaseOutcome::Passed)?;
 
+    // A failed evidence write stops the steps, but logout still runs, so the token never
+    // stays in the OS credential store.
+    let stepped = run_steps(&mut scenario, runner);
+
+    // Logout is cleanup, not a dependent step. It runs whenever login succeeded, even
+    // after a failure, and its own result decides the post-logout step.
+    if scenario.login_succeeded {
+        let outcome = match scenario.logout(runner) {
+            Ok(()) => CaseOutcome::Passed,
+            Err(assertion) => CaseOutcome::Failed { assertion },
+        };
+        runner.finish_case("live_logout", outcome)?;
+    } else {
+        runner.finish_case(
+            "live_logout",
+            CaseOutcome::NotRun {
+                reason: "login did not succeed",
+            },
+        )?;
+    }
+    if scenario.logged_out {
+        let outcome = match scenario.post_logout_status(runner) {
+            Ok(()) => CaseOutcome::Passed,
+            Err(assertion) => CaseOutcome::Failed { assertion },
+        };
+        runner.finish_case("live_post_logout_status", outcome)?;
+    } else {
+        runner.finish_case(
+            "live_post_logout_status",
+            CaseOutcome::NotRun {
+                reason: "logout did not succeed",
+            },
+        )?;
+    }
+    stepped
+}
+
+/// Runs the dependent live steps in order.
+fn run_steps(scenario: &mut LiveScenario, runner: &mut Runner) -> Result<(), E2eError> {
     let mut blocked = false;
     blocked = scenario.step(runner, "live_login", blocked, LiveScenario::login)?;
     blocked = scenario.step(
@@ -532,45 +571,11 @@ pub fn run(runner: &mut Runner) -> Result<(), E2eError> {
         blocked,
         LiveScenario::run_after_update,
     )?;
-    blocked = scenario.step(
+    scenario.step(
         runner,
         "live_missing_program",
         blocked,
         LiveScenario::missing_program_exits_127,
     )?;
-
-    // Logout is cleanup, not a dependent step. It runs whenever login succeeded, even
-    // after a failure, and its own result decides the post-logout step.
-    if scenario.login_succeeded {
-        let outcome = match scenario.logout(runner) {
-            Ok(()) => CaseOutcome::Passed,
-            Err(assertion) => CaseOutcome::Failed { assertion },
-        };
-        let failed = matches!(outcome, CaseOutcome::Failed { .. });
-        runner.finish_case("live_logout", outcome)?;
-        blocked = blocked || failed;
-    } else {
-        runner.finish_case(
-            "live_logout",
-            CaseOutcome::NotRun {
-                reason: "login did not succeed",
-            },
-        )?;
-    }
-    if scenario.logged_out {
-        let _ = blocked;
-        let outcome = match scenario.post_logout_status(runner) {
-            Ok(()) => CaseOutcome::Passed,
-            Err(assertion) => CaseOutcome::Failed { assertion },
-        };
-        runner.finish_case("live_post_logout_status", outcome)?;
-    } else {
-        runner.finish_case(
-            "live_post_logout_status",
-            CaseOutcome::NotRun {
-                reason: "logout did not succeed",
-            },
-        )?;
-    }
     Ok(())
 }

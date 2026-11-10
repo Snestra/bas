@@ -240,7 +240,10 @@ fn help_lists_commands(runner: &mut Runner) -> Step {
         observation.stdout_contains(usage),
         "help prints the usage line",
     )?;
-    for command in ["auth", "run", "env", "create", "doctor", "grant"] {
+    for command in [
+        "auth", "find", "run", "env", "create", "update", "doctor", "listen", "pair", "grant",
+        "tui",
+    ] {
         ensure(
             observation.stdout_contains(&format!("  {command} ")),
             "help lists every documented command",

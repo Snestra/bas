@@ -30,7 +30,7 @@ pub enum Command {
     ///
     /// Every reference is resolved before the program starts; if any is missing or denied,
     /// the program does not start. References to a remote profile are requested one by one
-    /// from its paired listener, and each needs approval there; a remote failure never falls
+    /// from its paired listener, and each needs approval or an exact grant there; a remote failure never falls
     /// back to a machine token. Arguments after -- reach the program unchanged, without a
     /// shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its environment. The program
     /// can still print what it receives.
@@ -66,7 +66,8 @@ pub enum Command {
     /// Asks on this terminal for the code that `bas listen --pair` shows, then for the
     /// handshake fingerprint shown on the listener. The profile stores no Secrets Manager
     /// token. Its bas://PROFILE/SECRET-ID references resolve only through that listener,
-    /// one approved request at a time. Pairing grants no secret by itself.
+    /// one request at a time, and each needs approval or an exact grant there. Pairing
+    /// grants no secret by itself.
     Pair(PairArgs),
     /// Create, list, and revoke standing grants for paired devices.
     ///

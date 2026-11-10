@@ -185,14 +185,25 @@ fn store_error(profile: &ProfileName, err: &keyring_core::Error) -> Error {
                  {profile} --help`"
             ));
         }
-        keyring_core::Error::NoStorageAccess(_) => "is locked or denied access",
-        keyring_core::Error::NoDefaultStore => "is not available on this system",
-        _ => "failed",
+        _ => store_reason(err),
     };
     Error::new(format!(
         "the OS credential store {reason} for profile '{profile}'; headless systems can use \
          --from-env instead"
     ))
+}
+
+/// Says how the OS credential store failed. Only platform errors add their own detail,
+/// because other variants can carry stored bytes.
+fn store_reason(err: &keyring_core::Error) -> String {
+    match err {
+        keyring_core::Error::NoStorageAccess(detail) => {
+            format!("is locked or denied access ({detail})")
+        }
+        keyring_core::Error::PlatformFailure(detail) => format!("failed ({detail})"),
+        keyring_core::Error::NoDefaultStore => "is not available on this system".to_owned(),
+        _ => "failed".to_owned(),
+    }
 }
 
 /// Agent Access key material, kept only in the OS credential store.
@@ -245,11 +256,7 @@ impl Material {
     }
 
     fn error(&self, err: &keyring_core::Error) -> Error {
-        let reason = match err {
-            keyring_core::Error::NoStorageAccess(_) => "is locked or denied access",
-            keyring_core::Error::NoDefaultStore => "is not available on this system",
-            _ => "failed",
-        };
+        let reason = store_reason(err);
         Error::new(format!(
             "the OS credential store {reason} for {}; Agent Access key material is never \
              stored elsewhere",

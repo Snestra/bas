@@ -2,7 +2,7 @@ Output proof/vhs/first-run-after-tui.gif
 Source tapes/settings.tape
 Env BAS_CONFIG_DIR "/tmp/bas-vhs/after-tui/bas"
 Hide
-Type "export PATH=/Volumes/stdNVMe/src/bitwarden-agent-secrets/target/release:$PATH; clear" Enter
+Type "export PATH=$PWD/target/release:$PATH; clear" Enter
 Sleep 500ms
 Show
 Type "bas tui" Enter

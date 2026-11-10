@@ -56,7 +56,7 @@ pub fn run(start: Start) -> color_eyre::Result<()> {
 }
 
 async fn run_in(terminal: &mut ratatui::DefaultTerminal, start: Start) -> color_eyre::Result<()> {
-    let mut events = EventHandler::new();
+    let mut events = EventHandler::new()?;
     let profile = match start {
         Start::Open(profile, token) => {
             let profile = *profile;

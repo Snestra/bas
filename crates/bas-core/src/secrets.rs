@@ -41,6 +41,8 @@ pub enum Failure {
     Unprocessable,
     /// The server answered a bulk delete but did not delete the requested item.
     NotDeleted,
+    /// The server returned a secret from an organization other than the profile's.
+    OtherOrganization,
 }
 
 impl Failure {
@@ -95,7 +97,15 @@ impl Failure {
             Self::NotDeleted => Error::new(format!(
                 "Secrets Manager refused to {operation} for profile '{name}'"
             )),
-            Self::IdentityRejected | Self::Validation | Self::Unprocessable => Error::new(format!(
+            Self::OtherOrganization => Error::new(format!(
+                "could not {operation}: Secrets Manager returned a secret outside the \
+                 organization of profile '{name}'"
+            )),
+            Self::IdentityRejected => Error::new(format!(
+                "could not {operation}: Secrets Manager refused the machine token of profile \
+                 '{name}'"
+            )),
+            Self::Validation | Self::Unprocessable => Error::new(format!(
                 "could not {operation}: the Secrets Manager response was unusable"
             )),
         }
@@ -116,6 +126,9 @@ impl fmt::Display for Failure {
             Self::Validation => f.write_str("a field is empty, only whitespace, or too long"),
             Self::Unprocessable => f.write_str("the Secrets Manager response could not be read"),
             Self::NotDeleted => f.write_str("Secrets Manager answered but did not delete it"),
+            Self::OtherOrganization => {
+                f.write_str("Secrets Manager returned a secret from another organization")
+            }
         }
     }
 }
@@ -176,12 +189,15 @@ async fn authenticate(
         bitwarden_client_version: None,
         bitwarden_package_type: None,
     }));
-    let mut request = AccessTokenLoginRequest {
-        access_token: token.expose().to_owned(),
-        state_file: None,
-    };
+    let request = Wiped::new(
+        AccessTokenLoginRequest {
+            access_token: token.expose().to_owned(),
+            state_file: None,
+        },
+        |request| request.access_token.zeroize(),
+    );
     let result = client.auth().login_access_token(&request).await;
-    request.access_token.zeroize();
+    drop(request);
     let authenticated = match result {
         Ok(response) => response.authenticated,
         Err(err) => {
@@ -556,14 +572,21 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns the classified failure.
+    /// Returns the classified failure, or [`Failure::OtherOrganization`] when the secret
+    /// belongs to an organization other than the profile's.
     pub async fn get(&self, id: Uuid) -> Result<Secret, Failure> {
-        self.client
+        let secret = self
+            .client
             .secrets()
             .get(&SecretGetRequest { id })
             .await
             .map(Secret::from_response)
-            .map_err(|err| Failure::classify(&err))
+            .map_err(|err| Failure::classify(&err))?;
+        if secret.organization_id == self.profile.organization {
+            Ok(secret)
+        } else {
+            Err(Failure::OtherOrganization)
+        }
     }
 
     /// Creates a secret in the profile's organization. Never retried.
@@ -572,16 +595,21 @@ impl Session {
     ///
     /// Returns the classified failure.
     pub async fn create(&self, write: &WriteRequest<'_>) -> Result<Secret, Failure> {
-        let mut request = SecretCreateRequest {
-            organization_id: self.profile.organization,
-            key: write.key.to_owned(),
-            value: write.value.expose().to_owned(),
-            note: write.note.expose().to_owned(),
-            project_ids: Some(write.project_ids.to_vec()),
-        };
+        let request = Wiped::new(
+            SecretCreateRequest {
+                organization_id: self.profile.organization,
+                key: write.key.to_owned(),
+                value: write.value.expose().to_owned(),
+                note: write.note.expose().to_owned(),
+                project_ids: Some(write.project_ids.to_vec()),
+            },
+            |request| {
+                request.value.zeroize();
+                request.note.zeroize();
+            },
+        );
         let result = self.client.secrets().create(&request).await;
-        request.value.zeroize();
-        request.note.zeroize();
+        drop(request);
         result
             .map(Secret::from_response)
             .map_err(|err| Failure::classify(&err))
@@ -699,19 +727,53 @@ impl Session {
     ///
     /// Returns the classified failure.
     pub async fn update(&self, id: Uuid, write: &WriteRequest<'_>) -> Result<Secret, Failure> {
-        let mut request = SecretPutRequest {
-            id,
-            organization_id: self.profile.organization,
-            key: write.key.to_owned(),
-            value: write.value.expose().to_owned(),
-            note: write.note.expose().to_owned(),
-            project_ids: Some(write.project_ids.to_vec()),
-        };
+        let request = Wiped::new(
+            SecretPutRequest {
+                id,
+                organization_id: self.profile.organization,
+                key: write.key.to_owned(),
+                value: write.value.expose().to_owned(),
+                note: write.note.expose().to_owned(),
+                project_ids: Some(write.project_ids.to_vec()),
+            },
+            |request| {
+                request.value.zeroize();
+                request.note.zeroize();
+            },
+        );
         let result = self.client.secrets().update(&request).await;
-        request.value.zeroize();
-        request.note.zeroize();
+        drop(request);
         result
             .map(Secret::from_response)
             .map_err(|err| Failure::classify(&err))
+    }
+}
+
+/// An SDK request holding secret text, wiped when dropped.
+///
+/// Dropping also happens when the caller cancels the future that awaits the SDK call, so the
+/// secret copy is cleared on every path, not only after the call returns.
+struct Wiped<T> {
+    value: T,
+    wipe: fn(&mut T),
+}
+
+impl<T> Wiped<T> {
+    fn new(value: T, wipe: fn(&mut T)) -> Self {
+        Self { value, wipe }
+    }
+}
+
+impl<T> std::ops::Deref for Wiped<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T> Drop for Wiped<T> {
+    fn drop(&mut self) {
+        (self.wipe)(&mut self.value);
     }
 }

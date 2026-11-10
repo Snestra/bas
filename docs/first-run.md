@@ -125,9 +125,9 @@ The first-run path is: `bas auth login` or `bas tui`, then `bas auth status`, `b
 | `bas: Secrets Manager did not authenticate profile 'NAME'` | The server answered without a session | `bas auth login` again |
 | `bas: the machine token for profile 'NAME' names no organization` | A token that is not a machine account access token; create one for the machine account in the web vault | `bas auth login` |
 | `bas: the machine token for profile 'NAME' belongs to organization ID, not the configured ID` | `--organization` with the wrong ID | `bas auth login` without `--organization` |
-| `bas: the OS credential store is locked or denied access for profile 'NAME'; headless systems can use --from-env instead` | A locked keychain (macOS) | `security unlock-keychain` |
-| `bas: the OS credential store is not available on this system for profile 'NAME'; headless systems can use --from-env instead` | A server without a keychain service; let your secret delivery set `BWS_ACCESS_TOKEN` in the environment | `bas auth login --from-env` |
-| `bas: the OS credential store failed for profile 'NAME'; headless systems can use --from-env instead` | A keychain error | `bas auth login` again |
+| `bas: the OS credential store is locked or denied access (DETAIL) for profile 'NAME'; headless systems can use --from-env instead` | A locked keychain (macOS) | `security unlock-keychain` |
+| `bas: the OS credential store failed (DETAIL) for profile 'NAME'; headless systems can use --from-env instead` | A server without a keychain service, such as `DBus error: Failed to connect to socket`; let your secret delivery set `BWS_ACCESS_TOKEN` in the environment | `bas auth login --from-env` |
+| `bas: the OS credential store failed for profile 'NAME'; headless systems can use --from-env instead` | Another keychain error | `bas auth login` again |
 | `bas: could not write profile configuration FILE` | A full or read-only disk | `df -h "$BAS_CONFIG_DIR"` |
 | `authenticated profile 'NAME' for organization ID at URL; token source: os credential store`, then `` bas: next: run `bas tui --profile NAME` to browse your secrets, or `bas find --profile NAME` to list references `` | Success | `bas tui --profile NAME` |
 

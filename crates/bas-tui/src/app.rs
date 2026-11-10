@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
@@ -35,6 +38,13 @@ pub struct App {
     pub copied: Option<Copied>,
     /// Source of request numbers, which tie each network result to the screen that asked.
     next_request: u64,
+    /// Numbers each listing request as it starts, so a reply that started earlier than the
+    /// data on screen cannot replace it.
+    list_clock: Arc<AtomicU64>,
+    /// Start number of the project listing on screen.
+    projects_started: u64,
+    /// Start number of the secrets listing on screen, per project or `None` for all.
+    secrets_started: HashMap<Option<Uuid>, u64>,
 }
 
 /// One screen of the stack.
@@ -242,6 +252,9 @@ impl App {
             clipboard: Clipboard::new().ok(),
             copied: None,
             next_request: 0,
+            list_clock: Arc::new(AtomicU64::new(1)),
+            projects_started: 0,
+            secrets_started: HashMap::new(),
         }
     }
 
@@ -277,15 +290,15 @@ impl App {
         match event {
             AppEvent::Connected(result) => self.on_connected(*result)?,
             AppEvent::Projects {
-                result,
+                listed,
                 select,
                 done,
-            } => self.on_projects(result, select, done),
+            } => self.on_projects(listed, select, done),
             AppEvent::Secrets {
                 project,
-                result,
+                listed,
                 done,
-            } => self.on_secrets(project, result, done),
+            } => self.on_secrets(project, listed, done),
             AppEvent::Secret { request, result } => self.on_secret(request, result),
             AppEvent::SecretSaved { form, result } => self.on_secret_saved(form, result),
             AppEvent::WriteFailed {
@@ -366,13 +379,15 @@ impl App {
         Ok(())
     }
 
-    fn on_projects(
-        &mut self,
-        result: color_eyre::Result<Vec<Project>>,
-        select: Option<Uuid>,
-        done: Option<String>,
-    ) {
-        let projects = match result {
+    fn on_projects(&mut self, listed: Listed<Project>, select: Option<Uuid>, done: Option<String>) {
+        if listed.started < self.projects_started {
+            if let Some(done) = done {
+                self.status = Status::Info(done);
+            }
+            return;
+        }
+        self.projects_started = listed.started;
+        let projects = match listed.result {
             Ok(projects) => projects,
             Err(err) => {
                 self.status = Status::Error(match done {
@@ -401,10 +416,18 @@ impl App {
     fn on_secrets(
         &mut self,
         project: Option<Uuid>,
-        result: color_eyre::Result<Vec<Identifier>>,
+        listed: Listed<Identifier>,
         done: Option<String>,
     ) {
-        let items = match result {
+        let shown = self.secrets_started.entry(project).or_default();
+        if listed.started < *shown {
+            if let Some(done) = done {
+                self.status = Status::Info(done);
+            }
+            return;
+        }
+        *shown = listed.started;
+        let items = match listed.result {
             Ok(items) => items,
             Err(err) => {
                 self.status = Status::Error(match done {
@@ -939,6 +962,7 @@ impl App {
             return;
         };
         self.status = Status::Info(format!("Saving project {name}"));
+        let clock = Arc::clone(&self.list_clock);
         self.events.spawn(async move {
             let (action, written) = match renaming {
                 Some(id) => (
@@ -952,7 +976,7 @@ impl App {
             };
             match written {
                 Ok(stored) => AppEvent::Projects {
-                    result: list_projects(&session).await,
+                    listed: list_projects(&session, &clock).await,
                     select: Some(stored.id()),
                     done: Some(format!(
                         "Server saved project {}. List re-read from the server",
@@ -975,11 +999,12 @@ impl App {
                 }
                 self.status = Status::Info(format!("Deleting {key}"));
                 let trash = self.trash_url();
+                let clock = Arc::clone(&self.list_clock);
                 self.events.spawn(async move {
                     match session.delete(id).await {
                         Ok(()) => AppEvent::Secrets {
                             project: listing,
-                            result: list_secrets(&session, listing).await,
+                            listed: list_secrets(&session, &clock, listing).await,
                             done: Some(format!("Moved {key} to trash. Restore it at {trash}")),
                         },
                         Err(failure) => write_failed(format!("delete {key}"), failure, None),
@@ -988,10 +1013,11 @@ impl App {
             }
             DeleteTarget::Project { id, name } => {
                 self.status = Status::Info(format!("Deleting project {name}"));
+                let clock = Arc::clone(&self.list_clock);
                 self.events.spawn(async move {
                     match session.delete_project(id).await {
                         Ok(()) => AppEvent::Projects {
-                            result: list_projects(&session).await,
+                            listed: list_projects(&session, &clock).await,
                             select: None,
                             done: Some(format!("Deleted project {name}")),
                         },
@@ -1006,9 +1032,10 @@ impl App {
 
     fn load_projects(&self, session: &Session) {
         let session = session.clone();
+        let clock = Arc::clone(&self.list_clock);
         self.events.spawn(async move {
             AppEvent::Projects {
-                result: list_projects(&session).await,
+                listed: list_projects(&session, &clock).await,
                 select: None,
                 done: None,
             }
@@ -1018,10 +1045,11 @@ impl App {
     /// Re-reads one secrets list. `done` replaces the count on the status line.
     fn load_secrets(&self, session: &Session, project: Option<Uuid>, done: Option<String>) {
         let session = session.clone();
+        let clock = Arc::clone(&self.list_clock);
         self.events.spawn(async move {
             AppEvent::Secrets {
                 project,
-                result: list_secrets(&session, project).await,
+                listed: list_secrets(&session, &clock, project).await,
                 done,
             }
         });
@@ -1061,17 +1089,28 @@ impl App {
     }
 
     /// Clears the clipboard only if it still holds the value this app copied.
+    ///
+    /// When the clipboard cannot be read or cleared, the copied value stays tracked so the
+    /// next tick tries again.
     fn clear_clipboard(&mut self) {
         let (Some(copied), Some(clipboard)) = (self.copied.take(), self.clipboard.as_mut()) else {
             return;
         };
-        let current = clipboard.get_text().map(Zeroizing::new);
-        let ours = current.is_ok_and(|text| text.as_str() == copied.text.as_str());
+        let ours = match clipboard.get_text().map(Zeroizing::new) {
+            Ok(text) => text.as_str() == copied.text.as_str(),
+            Err(arboard::Error::ContentNotAvailable) => false,
+            Err(_) => {
+                self.copied = Some(copied);
+                self.status = Status::Error("Could not read the clipboard to clear it".to_owned());
+                return;
+            }
+        };
         self.status = if !ours {
             Status::Info("The clipboard changed since the copy, so it was left alone".to_owned())
         } else if clipboard.clear().is_ok() {
             Status::Info("Cleared the copied value from the clipboard".to_owned())
         } else {
+            self.copied = Some(copied);
             Status::Error("Could not clear the clipboard".to_owned())
         };
     }
@@ -1089,21 +1128,43 @@ fn web_vault_base(api_url: &str) -> String {
     }
 }
 
+/// A listing and the number its request took from the list clock as it started.
+#[derive(Debug)]
+pub struct Listed<T> {
+    /// The clock value taken when the request started.
+    pub started: u64,
+    /// The sorted listing, or why it failed.
+    pub result: color_eyre::Result<Vec<T>>,
+}
+
 /// Projects the machine account can read, sorted by name.
-async fn list_projects(session: &Session) -> color_eyre::Result<Vec<Project>> {
-    let mut projects = session.list_projects().await?;
-    projects.sort_by(|a, b| a.name().cmp(b.name()));
-    Ok(projects)
+async fn list_projects(session: &Session, clock: &AtomicU64) -> Listed<Project> {
+    let started = clock.fetch_add(1, Ordering::Relaxed);
+    let result = session.list_projects().await.map(|mut projects| {
+        projects.sort_by(|a, b| a.name().cmp(b.name()));
+        projects
+    });
+    Listed {
+        started,
+        result: result.map_err(color_eyre::Report::new),
+    }
 }
 
 /// Secrets the machine account can read, in one project or all of them, sorted by key.
 async fn list_secrets(
     session: &Session,
+    clock: &AtomicU64,
     project: Option<Uuid>,
-) -> color_eyre::Result<Vec<Identifier>> {
-    let mut secrets = session.list_identifiers(project).await?;
-    secrets.sort_by(|a, b| a.key().cmp(b.key()));
-    Ok(secrets)
+) -> Listed<Identifier> {
+    let started = clock.fetch_add(1, Ordering::Relaxed);
+    let result = session.list_identifiers(project).await.map(|mut secrets| {
+        secrets.sort_by(|a, b| a.key().cmp(b.key()));
+        secrets
+    });
+    Listed {
+        started,
+        result: result.map_err(color_eyre::Report::new),
+    }
 }
 
 /// Every project a secret belongs to. A secret read returns only the first one, while the

@@ -2,15 +2,16 @@
 //!
 //! Entries are built straight from the platform store, so no global default store is set.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use keyring_core::{CredentialStore, Entry, Error, Result};
+use keyring_core::{CredentialStore, Entry, Result};
 
 /// Credential-store service name; the account name is the profile name.
 const SERVICE: &str = "bas";
 
-/// The platform store, created once per process.
-static STORE: LazyLock<Result<Arc<CredentialStore>>> = LazyLock::new(platform_store);
+/// The platform store, kept once created. A failed creation is not kept, so a later call
+/// tries again, for example after the user unlocks or starts the platform store.
+static STORE: Mutex<Option<Arc<CredentialStore>>> = Mutex::new(None);
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn platform_store() -> Result<Arc<CredentialStore>> {
@@ -34,11 +35,14 @@ fn platform_store() -> Result<Arc<CredentialStore>> {
 ///
 /// # Errors
 ///
-/// Fails with [`Error::NoDefaultStore`] when the platform store could not be created, and
-/// with the store's own error when it rejects the account.
+/// Fails with the platform's own error when the store could not be created, and with the
+/// store's error when it rejects the account.
 pub(super) fn entry(account: &str) -> Result<Entry> {
-    match &*STORE {
-        Ok(store) => store.build(SERVICE, account, None),
-        Err(_) => Err(Error::NoDefaultStore),
-    }
+    let mut cached = STORE.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = match &*cached {
+        Some(store) => Arc::clone(store),
+        None => Arc::clone(cached.insert(platform_store()?)),
+    };
+    drop(cached);
+    store.build(SERVICE, account, None)
 }
