@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bas-core", "crates/bas", "crates/bas-tui"]
+members = ["crates/bas-core", "crates/bas", "crates/bas-broker", "crates/bas-tui"]
 
 [workspace.package]
 version = "0.3.0"
@@ -14,6 +14,7 @@ aho-corasick = "1.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 bas-core = { path = "crates/bas-core" }
 bas-tui = { path = "crates/bas-tui" }
+bas-broker = { path = "crates/bas-broker" }
 ap-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }
 ap-relay-client = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36", default-features = false }
 ap-relay-protocol = { git = "https://github.com/bitwarden/agent-access", rev = "512756278c41d19314b462ca978c40d29c51bd36" }

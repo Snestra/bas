@@ -134,6 +134,21 @@ $ bas run --env "API_TOKEN=bas://work/<secret-id>" -- sh -c 'echo "$API_TOKEN"'
 [bas:API_TOKEN]
 ```
 
+### Values from the broker
+
+On Linux, `bas run --with NAME` asks the bas broker for the value of the policy entry `NAME` instead of reading Secrets Manager itself. The broker is `bas broker`, run as a systemd service under its own user. It holds the machine token, checks the caller's uid against `/etc/bas/broker.toml`, hands out only entries of `/var/lib/bas/policy.toml` with `delivery = "env"`, and writes one journal entry with `BAS_AUDIT=1` per value. `bas run` masks the value in the program's output as it does for `--env`. `BAS_BROKER_SOCKET` replaces the socket path `/run/bas/broker.sock`.
+
+```text
+$ bas run --with JINA_API_KEY -- sh -c 'echo "$JINA_API_KEY"'
+[bas:JINA_API_KEY]
+```
+
+Entries with `delivery = "proxy"` never leave the broker. A program sends its HTTPS requests through the broker's proxy on `127.0.0.1:3128` and trusts `/run/bas/ca-bundle.pem`, and the broker sets the entry's header on requests to the entry's host whose method and path match `allow`. Other hosts get a plain tunnel.
+
+```sh
+curl -x http://127.0.0.1:3128 --cacert /run/bas/ca-bundle.pem https://api.jina.ai/v1/embeddings ...
+```
+
 ### Reference templates
 
 A reference template is a file of `NAME=bas://profile/id` bindings, and `bas env run` follows the same rules as `bas run`.

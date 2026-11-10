@@ -1,14 +1,14 @@
 //! Appends one JSON line per credential that `bas run` hands to a program.
 //!
-//! A line records the time, the variable name, the reference, the program, and the working
-//! directory. It never records a value.
+//! A line records the time, the variable name, where the value came from (a reference, or
+//! the broker socket), the program, and the working directory. It never records a value.
 
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use bas_core::reference::Binding;
+use bas_core::reference::{EnvName, SecretRef};
 
 use crate::output::Error;
 
@@ -37,8 +37,16 @@ pub fn path() -> Result<PathBuf, Error> {
     Ok(dir.join(LOG_FILE))
 }
 
-/// Appends one line per binding. The program must not start when this fails.
-pub fn record(bindings: &[Binding], program: &OsStr) -> Result<(), Error> {
+/// Where `bas run` got the value of one variable.
+pub enum Source<'a> {
+    /// Read through a profile.
+    Reference(&'a SecretRef),
+    /// Handed out by the bas broker on this socket.
+    Broker(&'a Path),
+}
+
+/// Appends one line per variable. The program must not start when this fails.
+pub fn record(variables: &[(&EnvName, Source<'_>)], program: &OsStr) -> Result<(), Error> {
     let path = path()?;
     let failed = |_| {
         Error::new(format!(
@@ -51,16 +59,23 @@ pub fn record(bindings: &[Binding], program: &OsStr) -> Result<(), Error> {
         .map(|dir| dir.display().to_string())
         .unwrap_or_default();
     let mut lines = String::new();
-    for binding in bindings {
-        let line = serde_json::json!({
+    for (name, source) in variables {
+        let mut line = serde_json::json!({
             "time": time,
-            "name": binding.name.as_str(),
-            "reference": binding.reference.to_string(),
-            "profile": binding.reference.profile.as_str(),
+            "name": name.as_str(),
             "program": program.to_string_lossy(),
             "directory": directory,
             "pid": std::process::id(),
         });
+        match source {
+            Source::Reference(reference) => {
+                line["reference"] = reference.to_string().into();
+                line["profile"] = reference.profile.as_str().into();
+            }
+            Source::Broker(socket) => {
+                line["broker"] = socket.display().to_string().into();
+            }
+        }
         lines.push_str(&line.to_string());
         lines.push('\n');
     }

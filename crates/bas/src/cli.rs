@@ -38,6 +38,12 @@ pub enum Command {
     /// file or send it elsewhere. Before the program starts, bas appends one JSON line per
     /// binding to audit.log in BAS_STATE_DIR or the user state directory, and the line never
     /// holds a value. If the audit line can't be written, the program doesn't start.
+    ///
+    /// With --with NAME, bas asks the bas broker (Linux only) for the value of the policy
+    /// entry NAME instead of reading Secrets Manager itself. The broker checks the caller's
+    /// uid and its policy, writes an audit entry to the system journal, and refuses names
+    /// whose delivery is not env. BAS_BROKER_SOCKET overrides the socket path
+    /// /run/bas/broker.sock.
     Run(RunArgs),
     /// Write or run reference-only environment templates.
     #[command(subcommand)]
@@ -87,6 +93,34 @@ pub enum Command {
     /// profile does not exist yet, it asks for a machine token and saves the profile as
     /// `bas auth login` does.
     Tui(TuiArgs),
+    /// Run the credential broker, normally as the systemd service bas-broker.service.
+    ///
+    /// The broker reads the machine token from the systemd credential bws, serves an HTTP
+    /// and JSON API on a unix socket to the uids in broker.toml, and runs an HTTPS proxy
+    /// that adds policy credentials to requests for policy hosts. It writes one journal
+    /// entry with BAS_AUDIT=1 per credential it hands out or adds. Linux only.
+    #[cfg(target_os = "linux")]
+    Broker(BrokerArgs),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Args)]
+pub struct BrokerArgs {
+    /// Unix socket for the API.
+    #[arg(long, value_name = "PATH", default_value = bas_broker::protocol::DEFAULT_SOCKET)]
+    pub socket: PathBuf,
+    /// Machine settings: allowed uids, the Secrets Manager profile, and the proxy address.
+    #[arg(long, value_name = "PATH", default_value = "/etc/bas/broker.toml")]
+    pub config: PathBuf,
+    /// Active policy.
+    #[arg(long, value_name = "PATH", default_value = "/var/lib/bas/policy.toml")]
+    pub policy: PathBuf,
+    /// Private directory for the proxy's certificate authority.
+    #[arg(long, value_name = "PATH", default_value = "/var/lib/bas")]
+    pub state_dir: PathBuf,
+    /// File to write with the system roots and the proxy's certificate authority.
+    #[arg(long, value_name = "PATH", default_value = "/run/bas/ca-bundle.pem")]
+    pub ca_bundle: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -284,10 +318,14 @@ pub struct FindArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("secrets").required(true).multiple(true).args(["bindings", "with"])))]
 pub struct RunArgs {
     /// Binding NAME=bas://PROFILE/SECRET-ID. Repeat for more variables.
-    #[arg(long = "env", value_name = "NAME=REFERENCE", required = true)]
+    #[arg(long = "env", value_name = "NAME=REFERENCE")]
     pub bindings: Vec<String>,
+    /// Policy name whose value the bas broker sets as variable NAME. Repeat for more.
+    #[arg(long = "with", value_name = "NAME")]
+    pub with: Vec<String>,
     /// Program and arguments, after --.
     #[arg(last = true, required = true, value_name = "COMMAND")]
     pub command: Vec<OsString>,
