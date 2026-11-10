@@ -386,7 +386,6 @@ impl App {
             }
             return;
         }
-        self.projects_started = listed.started;
         let projects = match listed.result {
             Ok(projects) => projects,
             Err(err) => {
@@ -397,6 +396,7 @@ impl App {
                 return;
             }
         };
+        self.projects_started = listed.started;
         if done.is_some() || !matches!(self.status, Status::Error(_)) {
             self.status = Status::Info(done.unwrap_or_else(|| match projects.len() {
                 1 => "1 project".to_owned(),
@@ -419,14 +419,18 @@ impl App {
         listed: Listed<Identifier>,
         done: Option<String>,
     ) {
-        let shown = self.secrets_started.entry(project).or_default();
-        if listed.started < *shown {
+        if listed.started
+            < self
+                .secrets_started
+                .get(&project)
+                .copied()
+                .unwrap_or_default()
+        {
             if let Some(done) = done {
                 self.status = Status::Info(done);
             }
             return;
         }
-        *shown = listed.started;
         let items = match listed.result {
             Ok(items) => items,
             Err(err) => {
@@ -437,6 +441,7 @@ impl App {
                 return;
             }
         };
+        self.secrets_started.insert(project, listed.started);
         if done.is_some() || !matches!(self.status, Status::Error(_)) {
             self.status = Status::Info(done.unwrap_or_else(|| match items.len() {
                 1 => "1 secret".to_owned(),
