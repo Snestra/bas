@@ -372,6 +372,7 @@ dependencies = [
  "ap-relay-protocol",
  "arboard",
  "async-trait",
+ "atomicwrites",
  "bas-core",
  "bas-tui",
  "bitwarden",

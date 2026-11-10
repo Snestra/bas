@@ -381,7 +381,7 @@ fn default_tui_profile(profiles: &Profiles) -> Result<ProfileName> {
     let default: ProfileName = DEFAULT_PROFILE.parse()?;
     let names: Vec<ProfileName> = profiles.iter().map(|profile| profile.name).collect();
     match names.as_slice() {
-        _ if profiles.is_configured(&default) => Ok(default),
+        _ if profiles.find(&default).is_some() => Ok(default),
         [only] => Ok(only.clone()),
         [] => Ok(default),
         several => {

@@ -5,7 +5,7 @@ description: Find Bitwarden Secrets Manager references, inject them into a comma
 
 # Bitwarden Agent Secrets
 
-Use `bas` for Secrets Manager. Do not substitute Bitwarden Password Manager, another account, or a raw secret export. This implementation is unreleased and still needs live-service, paired-delivery, and cross-platform verification.
+Use `bas` for Secrets Manager. Do not substitute Bitwarden Password Manager, another account, or a raw secret export. `bas` is not ready for production use and still needs live-service, paired-delivery, and cross-platform verification.
 
 ## Safety
 

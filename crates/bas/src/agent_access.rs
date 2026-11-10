@@ -108,6 +108,21 @@ struct Pins {
     in_flight: Option<InFlight>,
 }
 
+impl Pins {
+    /// Tells `release` at once that the reply to `device` will not be sent, so it does not
+    /// wait for the deadline.
+    fn fail_flight(&mut self, device: IdentityFingerprint) {
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|flight| flight.device == device && !flight.sending)
+            && let Some(flight) = self.in_flight.take()
+        {
+            let _ = flight.sent.send(false);
+        }
+    }
+}
+
 struct InFlight {
     device: IdentityFingerprint,
     /// [`PinnedRelay`] is passing the reply to the relay; it can no longer be withheld.
@@ -156,12 +171,16 @@ impl RelayClient for PinnedRelay {
         {
             let mut pins = lock(&self.pins);
             if pins.replaced.contains(&fingerprint) {
+                if released {
+                    pins.fail_flight(fingerprint);
+                }
                 return Err(refused(
                     "refused delivery to an unverified replacement session",
                 ));
             }
             if released {
                 if pins.fenced.contains(&fingerprint) {
+                    pins.fail_flight(fingerprint);
                     return Err(refused("refused a reply the listener withheld"));
                 }
                 match &mut pins.in_flight {
@@ -243,12 +262,13 @@ impl ListenerStore {
         if !known {
             // This runs inside the SDK event loop. Waiting here for a lock that this
             // listener holds while that loop sends a reply would stall both.
-            let Some(policy_lock) = ConfigLock::try_acquire()? else {
+            let acquired = ConfigLock::try_acquire();
+            let Ok(Some(policy_lock)) = acquired else {
                 drop(material.delete());
-                return Err(Error::new(
+                return Err(acquired.err().map_or_else(|| Error::new(
                     "another bas process is changing profiles or grants, or a reply is being \
                      released; pair again",
-                ));
+                ), Error::from));
             };
             let peer = pins.verified.take().ok_or_else(|| {
                 Error::new("the verified device changed while it was being saved")
@@ -386,7 +406,7 @@ impl Display for Denial {
             Self::Rejected => f.write_str("the operator did not approve"),
             Self::NoAnswer => f.write_str("no approval arrived in time"),
             Self::Retrieval(err) => write!(f, "retrieval failed: {err}"),
-            Self::Expired => f.write_str("retrieval finished after the requester gave up"),
+            Self::Expired => f.write_str("the request expired before the reply was released"),
             Self::Fenced => f.write_str(
                 "an earlier reply to the device was withheld; it is denied until the listener \
                  restarts",
@@ -598,7 +618,10 @@ async fn run_listener(listener: Listener) -> Result<ExitCode, Error> {
                         }
                         Err(denial) => Err(denial),
                     };
-                    let approved = release(&context, identity, decision, reply).await;
+                    let approved = tokio::select! {
+                        approved = release(&context, identity, decision, reply) => approved,
+                        _ = &mut shutdown => return Ok(ExitCode::SUCCESS),
+                    };
                     output::write_error(&format!(
                         "request {sequence} from {label}: {}",
                         if approved { "queued for relay" } else { "not delivered" }
@@ -625,7 +648,10 @@ async fn run_listener(listener: Listener) -> Result<ExitCode, Error> {
                     Decision::TimedOut => Err(Denial::NoAnswer),
                     Decision::Unavailable => Err(Denial::NoTerminal),
                 };
-                let approved = release(&context, device, decision, reply).await;
+                let approved = tokio::select! {
+                    approved = release(&context, device, decision, reply) => approved,
+                    _ = &mut shutdown => return Ok(ExitCode::SUCCESS),
+                };
                 let label = device_label(&pins, device);
                 output::write_error(&format!(
                     "request {sequence} from {label}: {}",
@@ -758,10 +784,7 @@ fn check_peer(context: &DeliveryContext<'_>, device: IdentityFingerprint) -> Res
     let current = profiles
         .get(&context.profile.name)
         .map_err(|_| Denial::ProfileChanged)?;
-    if current.organization != context.profile.organization
-        || current.endpoints != context.profile.endpoints
-        || current.credential != context.profile.credential
-    {
+    if current != *context.profile {
         return Err(Denial::ProfileChanged);
     }
     if !profiles
@@ -792,13 +815,15 @@ async fn final_authorization(
     };
     check_peer(context, device)?;
     let policy = Policy::load().map_err(Denial::Unreadable)?;
-    if let Some(grant) = delivery.grant
-        && policy.authorizing(
-            device,
-            &context.profile.name,
-            context.profile.organization,
-            delivery.id,
-        ) != Some(grant)
+    if delivery.grant.is_some()
+        && policy
+            .authorizing(
+                device,
+                &context.profile.name,
+                context.profile.organization,
+                delivery.id,
+            )
+            .is_none()
     {
         return Err(Denial::GrantRevoked);
     }

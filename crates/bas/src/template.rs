@@ -42,7 +42,7 @@ pub fn parse(text: &str) -> Result<Vec<Binding>, Error> {
 /// Fails when the file is unreadable, not UTF-8, or malformed.
 pub fn read(path: &Path) -> Result<Vec<Binding>, Error> {
     let bytes = fs::read(path)
-        .map_err(|_| Error::new(format!("could not read template {}", path.display())))?;
+        .map_err(|err| Error::new(format!("could not read template {}: {err}", path.display())))?;
     let text = String::from_utf8(bytes)
         .map_err(|_| Error::usage(format!("template {} is not UTF-8 text", path.display())))?;
     parse(&text)
@@ -57,7 +57,8 @@ pub enum Overwrite {
 
 /// Writes a template containing only references.
 ///
-/// A replacement is written to a temporary file and renamed into place.
+/// The text goes to a temporary file in the same directory, which is then moved into place,
+/// so a failed write never leaves a partial template behind.
 ///
 /// # Errors
 ///
@@ -68,42 +69,20 @@ pub fn write(path: &Path, bindings: &[Binding], overwrite: Overwrite) -> Result<
         text.push_str(&binding.to_string());
         text.push('\n');
     }
-    let failed = || Error::new(format!("could not write template {}", path.display()));
-    match overwrite {
-        Overwrite::Refuse => match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(mut file) => file.write_all(text.as_bytes()).map_err(|_| failed()),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(Error::new(format!(
+    let behavior = match overwrite {
+        Overwrite::Refuse => atomicwrites::DisallowOverwrite,
+        Overwrite::Replace => atomicwrites::AllowOverwrite,
+    };
+    atomicwrites::AtomicFile::new(path, behavior)
+        .write(|file| file.write_all(text.as_bytes()))
+        .map_err(|err| match io::Error::from(err) {
+            err if err.kind() == io::ErrorKind::AlreadyExists => Error::new(format!(
                 "{} already exists; pass --force to replace it",
                 path.display()
-            ))),
-            Err(_) => Err(failed()),
-        },
-        Overwrite::Replace => {
-            let name = path.file_name().ok_or_else(failed)?;
-            let mut temporary_name = std::ffi::OsString::from(".");
-            temporary_name.push(name);
-            temporary_name.push(format!(".{}.tmp", std::process::id()));
-            let temporary = path.with_file_name(temporary_name);
-            let mut file = match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-            {
-                Ok(file) => file,
-                Err(_) => return Err(failed()),
-            };
-            let written = file
-                .write_all(text.as_bytes())
-                .and_then(|()| fs::rename(&temporary, path));
-            if written.is_err() {
-                drop(fs::remove_file(&temporary));
-                return Err(failed());
-            }
-            Ok(())
-        }
-    }
+            )),
+            err => Error::new(format!(
+                "could not write template {}: {err}",
+                path.display()
+            )),
+        })
 }

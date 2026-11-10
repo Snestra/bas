@@ -8,6 +8,8 @@ use crossterm::event::Event as CrosstermEvent;
 use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 
+use crate::app::Listed;
+
 /// How often tick events fire. Ticks drive the clipboard countdown.
 const TICK_FPS: f64 = 4.0;
 
@@ -32,14 +34,14 @@ pub enum AppEvent {
     /// A project listing arrived. When it follows a write, `select` names the project to
     /// highlight and `done` is the status line text.
     Projects {
-        result: color_eyre::Result<Vec<Project>>,
+        listed: Listed<Project>,
         select: Option<Uuid>,
         done: Option<String>,
     },
     /// A secret listing arrived for the given project, or for all projects.
     Secrets {
         project: Option<Uuid>,
-        result: color_eyre::Result<Vec<Identifier>>,
+        listed: Listed<Identifier>,
         done: Option<String>,
     },
     /// One secret was read.
@@ -82,11 +84,18 @@ pub struct EventHandler {
 
 impl EventHandler {
     /// Creates the handler and spawns the task that reads terminal events and emits ticks.
-    pub fn new() -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Fails when the exit signal handlers cannot be installed.
+    pub fn new() -> color_eyre::Result<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let actor = EventTask::new(sender.clone());
-        tokio::spawn(async { actor.run().await });
-        Self { sender, receiver }
+        let actor = EventTask {
+            sender: sender.clone(),
+            exit: ExitSignals::new()?,
+        };
+        tokio::spawn(actor.run());
+        Ok(Self { sender, receiver })
     }
 
     /// Waits for the next event.
@@ -120,18 +129,14 @@ impl EventHandler {
 /// Reads crossterm events and emits ticks.
 struct EventTask {
     sender: mpsc::UnboundedSender<Event>,
+    exit: ExitSignals,
 }
 
 impl EventTask {
-    fn new(sender: mpsc::UnboundedSender<Event>) -> Self {
-        Self { sender }
-    }
-
-    async fn run(self) -> color_eyre::Result<()> {
+    async fn run(mut self) {
         let tick_rate = Duration::from_secs_f64(1.0 / TICK_FPS);
         let mut reader = crossterm::event::EventStream::new();
         let mut tick = tokio::time::interval(tick_rate);
-        let mut exit = ExitSignals::new()?;
         loop {
             let tick_delay = tick.tick();
             let crossterm_event = reader.next().fuse();
@@ -139,18 +144,22 @@ impl EventTask {
               _ = self.sender.closed() => {
                 break;
               }
-              () = exit.recv() => {
+              () = self.exit.recv() => {
                 self.send(Event::App(AppEvent::Quit));
               }
               _ = tick_delay => {
                 self.send(Event::Tick);
               }
-              Some(Ok(evt)) = crossterm_event => {
-                self.send(Event::Crossterm(evt));
-              }
+              event = crossterm_event => match event {
+                Some(Ok(evt)) => self.send(Event::Crossterm(evt)),
+                // The terminal is gone or unreadable, so quit the way `q` does.
+                Some(Err(_)) | None => {
+                  self.send(Event::App(AppEvent::Quit));
+                  break;
+                }
+              },
             };
         }
-        Ok(())
     }
 
     fn send(&self, event: Event) {

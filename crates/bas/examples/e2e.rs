@@ -3,9 +3,11 @@
 //! `offline` launches an existing `bas` executable through argument vectors, in an isolated
 //! configuration directory, and writes sanitized evidence into a new directory. The hidden
 //! `child` mode is the launch probe that the cases hand to `bas` as the program to run.
+//! `live-direct` runs the same kind of cases against a real Secrets Manager account.
 //!
 //! ```sh
 //! cargo run --locked --example e2e -- offline --bas /abs/path/to/bas --artifacts /abs/new/dir
+//! cargo run --locked --example e2e -- live-direct --bas /abs/path/to/bas --artifacts /abs/new/dir
 //! ```
 
 #[path = "e2e/evidence.rs"]

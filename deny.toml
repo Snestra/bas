@@ -1,5 +1,6 @@
 [advisories]
-# Every advisory fails the audit except the one below.
+# Every advisory fails the audit except the ones below.
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "Reached through bitwarden 2.1.0, bitwarden-crypto 3.0.0, and rsa 0.10.0-rc.20. No patched rsa release exists. Reviewed 2026-11-04." },
+    { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite in libsqlite3-sys 0.37.0, reached through bitwarden 2.1.0 and bitwarden-state 3.0.0, which caps rusqlite below 0.40. The fix needs rusqlite 0.41. bas never calls initialize_database, so it opens no SQLite file. Reviewed 2026-11-10." },
 ]
