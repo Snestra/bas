@@ -251,6 +251,9 @@ pub enum CredentialSource {
     OsStore,
     /// `BWS_ACCESS_TOKEN` in the environment of each invocation, for headless automation.
     Environment,
+    /// The file `bws` in `$CREDENTIALS_DIRECTORY`, which systemd fills from a
+    /// `LoadCredential=` or `LoadCredentialEncrypted=` line of the service unit.
+    SystemdCredential,
 }
 
 impl Display for CredentialSource {
@@ -258,6 +261,7 @@ impl Display for CredentialSource {
         f.write_str(match self {
             Self::OsStore => "os credential store",
             Self::Environment => "BWS_ACCESS_TOKEN environment variable",
+            Self::SystemdCredential => "systemd credential bws",
         })
     }
 }

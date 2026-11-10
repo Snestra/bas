@@ -20,6 +20,13 @@ pub const ACCESS_TOKEN_VAR: &str = "BWS_ACCESS_TOKEN";
 /// Pairing token variable read by the upstream Agent Access CLI.
 pub const AGENT_ACCESS_TOKEN_VAR: &str = "AAC_TOKEN";
 
+/// Name of the systemd credential that holds the machine token of `systemd-credential`
+/// profiles.
+pub const SYSTEMD_CREDENTIAL: &str = "bws";
+
+/// Directory where systemd puts the credentials of a service.
+const CREDENTIALS_DIRECTORY_VAR: &str = "CREDENTIALS_DIRECTORY";
+
 /// Bootstrap and pairing credentials that `bas` removes from every child environment.
 pub const BOOTSTRAP_CREDENTIAL_VARS: &[&str] = &[ACCESS_TOKEN_VAR, AGENT_ACCESS_TOKEN_VAR];
 
@@ -126,6 +133,7 @@ impl fmt::Debug for MachineToken {
 pub fn load_token(profile: &Profile) -> Result<MachineToken, Error> {
     match profile.credential {
         CredentialSource::Environment => load_environment_token(&profile.name),
+        CredentialSource::SystemdCredential => load_systemd_token(&profile.name),
         CredentialSource::OsStore => {
             let token = store_entry(&profile.name)?
                 .get_password()
@@ -146,6 +154,25 @@ pub fn load_environment_token(profile: &ProfileName) -> Result<MachineToken, Err
             "profile '{profile}' reads its token from {ACCESS_TOKEN_VAR}, which is not set"
         ))
     })?;
+    MachineToken::parse(SecretText::new(token))
+}
+
+/// Loads the machine token from the systemd credential `bws` for the named profile.
+///
+/// # Errors
+///
+/// Fails when the process has no credentials directory, or the file is missing, unreadable,
+/// or does not hold a machine token.
+pub fn load_systemd_token(profile: &ProfileName) -> Result<MachineToken, Error> {
+    let missing = || {
+        Error::new(format!(
+            "profile '{profile}' reads its token from the systemd credential \
+             {SYSTEMD_CREDENTIAL}, which this process was not given"
+        ))
+    };
+    let dir = env::var_os(CREDENTIALS_DIRECTORY_VAR).ok_or_else(missing)?;
+    let token = std::fs::read_to_string(std::path::Path::new(&dir).join(SYSTEMD_CREDENTIAL))
+        .map_err(|_| missing())?;
     MachineToken::parse(SecretText::new(token))
 }
 

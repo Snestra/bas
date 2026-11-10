@@ -1,0 +1,17 @@
+[book]
+title = "bas: Bitwarden Agent Secrets"
+authors = ["Snestra"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+git-repository-url = "https://github.com/Snestra/bas"
+edit-url-template = "https://github.com/Snestra/bas/edit/main/docs/{path}"
+site-url = "/bas/"

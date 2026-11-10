@@ -1,8 +1,8 @@
 # What a machine account token can do in Secrets Manager
 
-This table lists each Secrets Manager operation, the endpoint behind it, and the credential the Bitwarden server accepts for it. `bas-tui` builds only rows whose credential column says "machine account", and not all of them. For every other row it shows the web vault page instead.
+The tables below list each Secrets Manager operation, the endpoint behind it, and the credential the Bitwarden server accepts for it. `bas-tui` builds only rows whose credential column says "machine account", and not all of them. For every other row, it shows the web vault page instead.
 
-The sources are pinned to these commits.
+The sources are pinned to the commits below.
 
 - Server: [`bitwarden/server@a88325ae`](https://github.com/bitwarden/server/tree/a88325ae2131d59c45aa74019e05c8a7f62739bc)
 - Web vault: [`bitwarden/clients@0a89c2da`](https://github.com/bitwarden/clients/tree/0a89c2daf0a3754f139b9ac0ef8f40517e636517)
@@ -12,11 +12,23 @@ Below, `S` is `https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa7401
 
 ## How the server tells the two credentials apart
 
-A machine account token signs in with the `client_credentials` grant and asks only for the `api.secrets` scope (`bitwarden-core-3.0.0/src/auth/api/request/access_token_request.rs:19-22`). The server issues machine account access tokens with that one scope ([`src/Api/SecretsManager/Models/Request/AccessTokenCreateRequestModel.cs:36`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/SecretsManager/Models/Request/AccessTokenCreateRequestModel.cs#L36)). The identity server gives the token a `sub` claim with the machine account ID and a `type` claim of `ServiceAccount`, and no `amr` claim ([`src/Identity/IdentityServer/ClientProviders/SecretsManagerApiKeyProvider.cs:68-72`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Identity/IdentityServer/ClientProviders/SecretsManagerApiKeyProvider.cs#L68-L72)).
+A machine account token signs in with the `client_credentials` grant and asks only for the `api.secrets` scope (`bitwarden-core-3.0.0/src/auth/api/request/access_token_request.rs:19-22`). The server issues machine account access tokens with only the `api.secrets` scope ([`src/Api/SecretsManager/Models/Request/AccessTokenCreateRequestModel.cs:36`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/SecretsManager/Models/Request/AccessTokenCreateRequestModel.cs#L36)). The identity server gives the token a `sub` claim with the machine account ID and a `type` claim of `ServiceAccount`, and no `amr` claim ([`src/Identity/IdentityServer/ClientProviders/SecretsManagerApiKeyProvider.cs:68-72`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Identity/IdentityServer/ClientProviders/SecretsManagerApiKeyProvider.cs#L68-L72)).
 
-Every Secrets Manager controller except `RequestSMAccessController` has `[Authorize("secrets")]`, and that policy accepts the `api` or the `api.secrets` scope ([`src/Api/Startup.cs:150-156`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L150-L156)). The controllers then turn the caller into an `AccessClientType`: `ServiceAccount` for a machine account, `User` for a member, and `NoAccessCheck` for an organization owner or admin ([`src/Core/Enums/AccessClientType.cs:15-28`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Enums/AccessClientType.cs#L15-L28)). The authorization handlers and repositories decide what each type may do. Most controllers also call `AccessSecretsManager`, which is true for a machine account in its own organization ([`src/Core/Context/CurrentContext.cs:443-451`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Context/CurrentContext.cs#L443-L451)).
+Every Secrets Manager controller except `RequestSMAccessController` has `[Authorize("secrets")]`, and the `secrets` policy accepts the `api` or the `api.secrets` scope ([`src/Api/Startup.cs:150-156`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L150-L156)). The controllers then turn the caller into an `AccessClientType`: `ServiceAccount` for a machine account, `User` for a member, and `NoAccessCheck` for an organization owner or admin ([`src/Core/Enums/AccessClientType.cs:15-28`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Enums/AccessClientType.cs#L15-L28)). The authorization handlers and repositories decide what each type may do. Most controllers also call `AccessSecretsManager`, which is true for a machine account in its own organization ([`src/Core/Context/CurrentContext.cs:443-451`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Context/CurrentContext.cs#L443-L451)).
 
-The event log endpoints use the `Application` policy instead. That policy requires an `amr` claim of `Application` or `external` and the `api` scope ([`src/Api/Startup.cs:117-122`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L117-L122)), so a machine account token, whose only scope is `api.secrets`, can never read them. `api` and `api.secrets` are separate scope values ([`src/Core/Auth/IdentityServer/ApiScopes.cs:7`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Auth/IdentityServer/ApiScopes.cs#L7), [`12`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Auth/IdentityServer/ApiScopes.cs#L12)). `RequestSMAccessController` uses the `Web` policy, which also requires the web vault client ID ([`src/Api/Startup.cs:123-129`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L123-L129)).
+The event log endpoints use the `Application` policy instead. The `Application` policy requires an `amr` claim of `Application` or `external` and the `api` scope ([`src/Api/Startup.cs:117-122`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L117-L122)), so a machine account token, whose only scope is `api.secrets`, can never read them. `api` and `api.secrets` are separate scope values ([`src/Core/Auth/IdentityServer/ApiScopes.cs:7`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Auth/IdentityServer/ApiScopes.cs#L7), [`12`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Core/Auth/IdentityServer/ApiScopes.cs#L12)). `RequestSMAccessController` uses the `Web` policy, which also requires the web vault client ID ([`src/Api/Startup.cs:123-129`](https://github.com/bitwarden/server/blob/a88325ae2131d59c45aa74019e05c8a7f62739bc/src/Api/Startup.cs#L123-L129)).
+
+```text
+on(request to a Secrets Manager endpoint)
+  if the controller uses the Application or Web policy
+    a machine account token is refused, because its only scope is api.secrets
+  if the token's scope isn't api or api.secrets
+    refuse
+  caller type = ServiceAccount for a machine account,
+                User for a member,
+                NoAccessCheck for an owner or admin
+  the authorization handler and the repository decide what the caller type may do
+```
 
 ## Operations
 

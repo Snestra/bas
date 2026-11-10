@@ -1,0 +1,88 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.45;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+h1 {
+  font-size: 1.4rem;
+}
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+}
+dt {
+  font-weight: 600;
+}
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+label {
+  display: block;
+  margin-top: 1rem;
+  font-weight: 600;
+}
+input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 1rem;
+  padding: 0.6rem;
+  margin-top: 0.35rem;
+}
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+button {
+  font-size: 1rem;
+  padding: 0.7rem 1.1rem;
+  border-radius: 0.5rem;
+  border: 1px solid currentColor;
+  min-height: 44px;
+}
+button.secondary {
+  background: transparent;
+}
+.muted {
+  opacity: 0.7;
+}
+.warn,
+.error {
+  color: #b42318;
+}
+.ok {
+  color: #067647;
+}
+pre.diff {
+  overflow-x: auto;
+  padding: 0.75rem;
+  border: 1px solid #8884;
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+}
+pre.diff span {
+  display: block;
+  white-space: pre;
+}
+pre.diff .add {
+  color: #067647;
+}
+pre.diff .del {
+  color: #b42318;
+}
+pre.diff .hunk {
+  opacity: 0.6;
+}
+.list li {
+  margin-bottom: 0.5rem;
+}

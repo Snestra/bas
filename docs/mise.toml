@@ -1,0 +1,4 @@
+# Tools that build the documentation site in docs/.
+[tools]
+"github:rust-lang/mdBook" = "0.5.4"
+"github:badboy/mdbook-mermaid" = "0.17.1"

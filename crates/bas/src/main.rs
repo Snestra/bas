@@ -2,12 +2,16 @@
 
 mod agent_access;
 mod approval;
+mod audit;
+#[cfg(target_os = "linux")]
+mod broker_commands;
 mod cli;
 mod discover;
 mod doctor;
 mod execute;
 mod grant;
 mod input;
+mod mask;
 mod output;
 mod save;
 mod template;
@@ -22,7 +26,7 @@ use bas_core::login::{self, DEFAULT_PROFILE, LoginRequest};
 use bas_core::profile::{
     Connection, CredentialSource, EndpointFlags, Endpoints, Profiles, RelayUrl,
 };
-use bas_core::reference::{self, Binding, ProfileName, SecretRef, parse_secret_id};
+use bas_core::reference::{self, Binding, EnvName, ProfileName, SecretRef, parse_secret_id};
 use bas_core::secrets::Session;
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -55,6 +59,8 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 }
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    bas_broker::install_crypto_provider();
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => return usage_error(&err),
@@ -101,7 +107,8 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Find(args) => find(args),
         Command::Run(args) => {
             let bindings = cli_bindings(&args.bindings)?;
-            run(&bindings, &args.command)
+            let brokered = brokered_names(&args.with)?;
+            run(&bindings, &brokered, &args.command)
         }
         Command::Env(EnvCommand::Write(args)) => {
             let bindings = cli_bindings(&args.bindings)?;
@@ -120,7 +127,9 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             .map_err(stdout_failed)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Env(EnvCommand::Run(args)) => run(&template::read(&args.file)?, &args.command),
+        Command::Env(EnvCommand::Run(args)) => {
+            run(&template::read(&args.file)?, &[], &args.command)
+        }
         Command::Create(args) => create(args),
         Command::Update(args) => update(args),
         Command::Doctor(args) => doctor(args),
@@ -139,6 +148,28 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             agent_access::pair(name, relay)
         }
         Command::Tui(args) => tui(args.profile.as_deref()),
+        #[cfg(target_os = "linux")]
+        Command::Broker(args) => {
+            bas_broker::serve(&bas_broker::Options {
+                socket: args.socket,
+                ssh_agent_socket: args.ssh_agent_socket,
+                config: args.config,
+                state_dir: args.state_dir,
+                ca_bundle: args.ca_bundle,
+            })
+            .map_err(|err| Error::new(err.to_string()))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(target_os = "linux")]
+        Command::Add(args) => broker_commands::add(args),
+        #[cfg(target_os = "linux")]
+        Command::Rotate(args) => broker_commands::rotate(&args.name),
+        #[cfg(target_os = "linux")]
+        Command::Policy(cli::PolicyCommand::Edit) => broker_commands::policy_edit(),
+        #[cfg(target_os = "linux")]
+        Command::Audit(args) => broker_commands::audit(args),
+        #[cfg(target_os = "linux")]
+        Command::Passkey(cli::PasskeyCommand::Add) => broker_commands::passkey_add(),
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
         Command::Grant(GrantCommand::Revoke(args)) => {
@@ -266,12 +297,30 @@ fn cli_bindings(raw: &[String]) -> Result<Vec<Binding>> {
     Ok(bindings)
 }
 
+/// Parses the `--with` names and refuses a name given twice.
+fn brokered_names(raw: &[String]) -> Result<Vec<EnvName>> {
+    let mut names: Vec<EnvName> = Vec::new();
+    for (index, text) in raw.iter().enumerate() {
+        let position = format!("--with value {}", index + 1);
+        let name: EnvName = text
+            .parse()
+            .map_err(|err: bas_core::Error| Error::usage(format!("{position}: {err}")))?;
+        if names.iter().any(|other| other.as_str() == name.as_str()) {
+            return Err(Error::usage(format!(
+                "{position}: {name} is given more than once"
+            )));
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
 /// Returns only when the program could not be started.
-fn run(bindings: &[Binding], command: &[OsString]) -> Result<ExitCode> {
+fn run(bindings: &[Binding], brokered: &[EnvName], command: &[OsString]) -> Result<ExitCode> {
     let (program, arguments) = command
         .split_first()
         .ok_or_else(|| Error::usage("give the program to run after --"))?;
-    Err(execute::run(bindings, program, arguments))
+    Err(execute::run(bindings, brokered, program, arguments))
 }
 
 fn stdout_failed(_: io::Error) -> Error {
