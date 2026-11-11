@@ -41,7 +41,12 @@ jobs:
               exit 1
             fi
           done
-          cargo tree --locked --target all -i rsa >> dependency-evidence/dependency-trees.txt
+          cargo metadata --locked --format-version 1 > dependency-evidence/metadata.json
+          jq -r '.packages[] | select(.name == "rsa") | "rsa@" + .version' \
+            dependency-evidence/metadata.json > dependency-evidence/rsa-versions.txt
+          while IFS= read -r package; do
+            cargo tree --locked --target all -i "$package" >> dependency-evidence/dependency-trees.txt
+          done < dependency-evidence/rsa-versions.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
