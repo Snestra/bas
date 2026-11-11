@@ -18,8 +18,8 @@ contrib/linux/                      installed as
 
 You need the following:
 
-- A Linux machine with systemd and `systemd-creds`, and Tailscale with Tailscale Services on your tailnet.
-- `bas` built from source, as [Install bas](../getting-started/install.md) describes.
+- A Linux machine with systemd and `systemd-creds`, and an HTTPS reverse proxy for approvals. Tailscale Serve is one option.
+- `bas` v0.4.0 or later, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
 - A Secrets Manager machine account for the broker and an access token for it. Give the account read access to the project that holds the secrets the policy names, and write access to the project where `bas add` should create new secrets.
 - A passkey device, such as a YubiKey or a phone.
 
@@ -39,7 +39,7 @@ flowchart TD
 
 ## 1. Install the program
 
-Copy the program to a path that only root can write. The unit runs `/usr/local/bin/bas broker`.
+Copy the program to a path that only root can write. The unit runs `/usr/local/bin/bas broker`. For a release archive, run the command from the extracted directory and replace `target/release/bas` with `bas`. The archive includes the `contrib/linux/` files used below.
 
 ```sh
 sudo install -o root -g root -m 0755 target/release/bas /usr/local/bin/bas
@@ -77,7 +77,7 @@ sudo install -o root -g root -m 0644 contrib/linux/broker.toml.example /etc/bas/
 sudoedit /etc/bas/broker.toml
 ```
 
-In `broker.toml`, set your user ID in `allow-uids` (run `id -u` to find it), the organization ID, the project ID, the endpoints for your region, and the approval origin. The origin is `https://bas.TAILNET.ts.net`, where `TAILNET` is the name of your tailnet.
+In `broker.toml`, set your user ID in `allow-uids` (run `id -u` to find it), the organization ID, the project ID, the endpoints for your region, and the approval origin. The origin is the HTTPS address you will use for approvals, such as `https://bas.example.com`. For Tailscale Serve, use `https://bas.TAILNET.ts.net`, where `TAILNET` is the name of your tailnet.
 
 ```diff
 -allow-uids = [1000]
@@ -107,14 +107,31 @@ curl -s --unix-socket /run/bas/broker.sock http://localhost/v1/status
 The status reply holds the version, the hash of the active policy, and the IDs of pending approvals. Until you approve a first policy, the active policy is empty and allows nothing.
 
 ```text
-{"version":"0.3.0","policy_hash":"<sha-256 of the policy text>","pending":[]}
+{"version":"0.4.0","policy_hash":"<sha-256 of the policy text>","pending":[]}
 ```
 
 If the broker doesn't start, `journalctl -u bas-broker -e` shows why, for example a malformed `broker.toml` or a token that Secrets Manager refused.
 
 ## 6. Publish the approval pages
 
-The approval pages listen on `127.0.0.1:793`, and Tailscale publishes them to your tailnet as the Tailscale Service `svc:bas`. First, define the service `svc:bas` on the Services page of the Tailscale admin console, with HTTPS on port 443. Second, run the command below on the broker machine. Third, approve the machine as a host of the service in the admin console when it asks.
+The approval pages listen on `127.0.0.1:793` and need an HTTPS reverse proxy. Tailscale is optional, and no Tailscale account is needed when you use another reverse proxy.
+
+### Use an existing HTTPS reverse proxy
+
+First, choose a hostname with a TLS certificate trusted by your approval browser. Second, configure your reverse proxy to forward requests for that hostname to `http://127.0.0.1:793` on the broker host, preserving paths and query strings. Third, set `approvals.origin` in `/etc/bas/broker.toml` to that HTTPS address and restart `bas-broker`.
+
+```text
+Approval browser
+└── https://bas.example.com
+    └── HTTPS reverse proxy on the broker host
+        └── http://127.0.0.1:793
+```
+
+Keep the reverse proxy configuration and its certificate keys under administrator control. Restrict access with your firewall or private network, and keep the broker listener on loopback. Choose the hostname before enrolling a passkey, because passkeys are bound to that hostname.
+
+### Use Tailscale Serve
+
+Tailscale publishes the pages to your tailnet as the Tailscale Service `svc:bas`. First, define the service `svc:bas` on the Services page of the Tailscale admin console, with HTTPS on port 443. Second, run the command below on the broker machine. Third, approve the machine as a host of the service in the admin console when it asks.
 
 ```sh
 sudo tailscale serve --service=svc:bas --https=443 127.0.0.1:793
@@ -126,7 +143,7 @@ https://bas.TAILNET.ts.net (tailnet only) (svc:bas)
 |-- / proxy http://127.0.0.1:793
 ```
 
-The WebAuthn relying party ID is `bas.TAILNET.ts.net`, so a passkey you enroll there works for the broker's pages only, and a page on another name can't ask for it.
+The WebAuthn relying party ID is the hostname in `approvals.origin`. A passkey enrolled for that hostname cannot be used by a page on another hostname.
 
 ## 7. Enroll the first passkey
 

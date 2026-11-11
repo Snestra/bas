@@ -25,7 +25,7 @@ on(install bas)
     copy bas onto PATH
 ```
 
-Release v0.3.0 doesn't include the broker commands (`bas broker`, `bas add`, `bas rotate`, `bas policy`, `bas audit`, and `bas passkey`). To use the broker, build `bas` from source until a release includes them.
+Release v0.4.0 includes the broker commands on Linux. The Linux archive also includes `contrib/linux/` with the service unit, example settings, and shims. Tailscale is optional for all platforms.
 
 ## Build from source
 

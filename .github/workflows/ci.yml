@@ -1,6 +1,7 @@
 name: ci
 
 on:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
@@ -40,7 +41,12 @@ jobs:
               exit 1
             fi
           done
-          cargo tree --locked --target all -i rsa >> dependency-evidence/dependency-trees.txt
+          cargo metadata --locked --format-version 1 > dependency-evidence/metadata.json
+          jq -r '.packages[] | select(.name == "rsa") | "rsa@" + .version' \
+            dependency-evidence/metadata.json > dependency-evidence/rsa-versions.txt
+          while IFS= read -r package; do
+            cargo tree --locked --target all -i "$package" >> dependency-evidence/dependency-trees.txt
+          done < dependency-evidence/rsa-versions.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -88,6 +94,10 @@ jobs:
           mkdir package extracted
           cp "target/release/$binary" package/
           cp README.md package/
+          if [[ "$BUILD_OS" == Linux ]]; then
+            mkdir -p package/contrib
+            cp -R contrib/linux package/contrib/
+          fi
           tar -czf "$archive" -C package .
           tar -xzf "$archive" -C extracted
           cmp "target/release/$binary" "extracted/$binary"

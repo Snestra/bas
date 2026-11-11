@@ -13,7 +13,7 @@ bas broker (user bas, bas-broker.service)
 ├── /run/bas/broker.sock       HTTP and JSON API for the bas commands, caller uid checked
 ├── 127.0.0.1:3128             HTTPS proxy that adds credentials for policy hosts
 ├── /run/bas/ssh-agent.sock    ssh-agent that signs with policy keys, caller uid checked
-└── 127.0.0.1:793              approval pages, published to your phone with tailscale serve
+└── 127.0.0.1:793              approval pages, published through an HTTPS reverse proxy
 ```
 
 The socket API and the ssh-agent ask the kernel for the user ID of each caller, and they refuse every user ID that `allow-uids` in `/etc/bas/broker.toml` doesn't list. The proxy and the approval pages listen on loopback addresses only.
@@ -78,7 +78,7 @@ sequenceDiagram
 
 A change to what the broker allows needs your approval with a passkey. A passkey is a WebAuthn key pair kept on a device, such as a YubiKey or your phone, and each approval needs user verification on the device, such as a touch, a PIN, or Face ID. An agent on the broker machine can't give the verification.
 
-The broker serves the approval pages on `127.0.0.1:793`, and `tailscale serve` publishes them to your tailnet as `https://bas.TAILNET.ts.net`. Port 793 is below 1024, so no process of your user can take it, even while the broker is down. Each page shows what was asked, the user ID and process ID the kernel reported, and for a policy change the diff.
+The broker serves the approval pages on `127.0.0.1:793`. An HTTPS reverse proxy publishes them at the configured approval address, and Tailscale Serve is an optional way to do that. Port 793 is below 1024, so no process of your user can take it, even while the broker is down. Each page shows what was asked, the user ID and process ID the kernel reported, and for a policy change the diff.
 
 ```mermaid
 sequenceDiagram
