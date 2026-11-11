@@ -1,0 +1,40 @@
+# bas broker policy. Copy it to ~/.config/bas/policy.toml and run `bas policy edit`.
+# The broker uses only its own copy in /var/db/bas, which changes after a passkey
+# approves the diff. Every ref must use the profile named in /etc/bas/broker.toml.
+version = 1
+
+# An API key that the proxy adds to requests for one host.
+[secret.JINA_API_KEY]
+ref = "bas://home/<secret-id>"
+delivery = "proxy"                  # the only delivery the broker accepts
+host = "api.jina.ai"
+header = "Authorization"
+value = "Bearer {secret}"           # {secret} is replaced with the stored value
+allow = ["POST /v1/*"]              # METHOD /path/glob; every other request is refused
+
+# A GitHub App that mints a one-hour token for one repository at a time.
+[github]
+app_id = 123456
+private_key = "bas://home/<secret-id>"   # the App's private key, PEM
+
+[[github.repo]]
+name = "OWNER/REPO"
+installation_id = 7654321
+permissions = { contents = "write", pull_requests = "write", issues = "write", actions = "read" }
+
+# A Tailscale OAuth client that mints API access tokens.
+[tailscale]
+client_id = "bas://home/<secret-id>"
+client_secret = "bas://home/<secret-id>"
+scopes = ["devices:core:read"]
+api_allow = ["GET /api/v2/tailnet/-/devices"]
+
+# SSH keys the broker's ssh-agent signs with. Each is an ed25519 or rsa OpenSSH
+# private key without a passphrase.
+[ssh.github]
+ref = "bas://home/<secret-id>"
+use = ["auth"]                      # SSH logins, such as git over SSH to github.com
+
+[ssh.git_signing]
+ref = "bas://home/<secret-id>"
+use = ["sign-git"]                  # git commit and tag signatures only

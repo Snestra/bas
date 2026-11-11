@@ -1,0 +1,25 @@
+# /etc/bas/broker.toml, owned by root with mode 0644. Settings for this machine only.
+# Replace each <placeholder> before you start the broker.
+
+# Unix user IDs that may use the broker socket and the ssh-agent. The proxy listens on loopback and doesn't check the caller.
+# Run `id -u` as your own user to find yours.
+allow-uids = [501]
+
+# Loopback address of the HTTPS proxy. Leave it out to use 127.0.0.1:3128.
+# proxy = "127.0.0.1:3128"
+
+# The one Secrets Manager profile the broker reads secrets through. Its machine token
+# comes from /var/db/bas/credentials/bws, which only _bas can read, never from this file.
+[profile]
+name = "home"                                   # the PROFILE in bas://PROFILE/SECRET-ID
+organization = "<organization-id>"
+api-url = "https://api.bitwarden.com"           # https://api.bitwarden.eu for the EU region
+identity-url = "https://identity.bitwarden.com" # https://identity.bitwarden.eu for the EU region
+project = "<project-id>"                        # where `bas add` creates new secrets
+
+# Approval pages. They listen on a unix socket that only _bas and root can open, and
+# `tailscale serve` publishes it at the origin.
+# Each Mac needs its own origin, so a phone never approves on the wrong broker.
+[approvals]
+listen = "unix:/var/run/bas/approve.sock"
+origin = "https://bas-<machine>.<tailnet>.ts.net"

@@ -266,6 +266,70 @@ bas: not started: the bas broker denied NOT_IN_POLICY: it is not a proxy entry o
 
 The audit shows a `run` entry for the first command, a `deny` entry for the second, and a `sign` entry for the commit.
 
+## Install on macOS
+
+On macOS, a LaunchDaemon runs the broker as the role account `_bas`, and the files come from `contrib/macos/`. Steps 8, 10, and 11 above work the same way with `/var/run/bas/` in place of `/run/bas/`. Run the commands from an admin account, or from a root shell, while no agent runs.
+
+```text
+contrib/macos/                          installed as
+├── com.snestra.bas.rundir.plist        /Library/LaunchDaemons/com.snestra.bas.rundir.plist
+├── com.snestra.bas.broker.plist        /Library/LaunchDaemons/com.snestra.bas.broker.plist
+├── broker.toml.example                 /etc/bas/broker.toml
+├── policy.toml.example                 ~/.config/bas/policy.toml (your proposal)
+├── shims/ssh-keygen                    /usr/local/lib/bas/shims/ssh-keygen
+└── ssh_config.d/10-bas.conf            /etc/ssh/ssh_config.d/10-bas.conf
+```
+
+First, make the account you work in a standard user. While it is an admin, its password is worth root, and an agent that runs as you can capture it with a fake prompt, or wait at a `sudo` prompt for a Touch ID or security key touch you meant for something else. Root can read the token. Keep a separate admin account, type its password only at the login window, and check that `id -Gn` no longer lists `admin` for your account. Also remove any `sudo` PAM module or `PATH` entry that your account can write, such as files under `/opt/homebrew`.
+
+Then install the program and create `_bas`. The 450 to 499 range is for role accounts.
+
+```sh
+sudo install -o root -g wheel -m 0755 bas /usr/local/bin/bas
+sudo dseditgroup -o create -i 450 -r "bas broker" _bas
+sudo sysadminctl -addUser _bas -roleAccount -UID 450 -GID 450 \
+  -shell /usr/bin/false -home /var/empty -fullName "bas broker"
+id _bas
+```
+
+Create the state, token, and log files. `read -s` hides what you paste. Don't put the token in a file of your own or on a command line.
+
+```sh
+sudo install -d -o _bas -g _bas -m 0700 /var/db/bas /var/db/bas/credentials
+sudo sh -c 'printf "Machine token for the bas broker: "; IFS= read -rs t; echo;
+  umask 077; printf %s "$t" > /var/db/bas/credentials/bws'
+sudo chown _bas:_bas /var/db/bas/credentials/bws && sudo chmod 0400 /var/db/bas/credentials/bws
+sudo install -d -o root -g wheel -m 0755 /var/log/bas
+sudo touch /var/log/bas/audit.jsonl /var/log/bas/broker.log
+sudo chown root:_bas /var/log/bas/audit.jsonl && sudo chmod 0660 /var/log/bas/audit.jsonl
+sudo chflags sappnd /var/log/bas/audit.jsonl
+sudo chown _bas:_bas /var/log/bas/broker.log && sudo chmod 0640 /var/log/bas/broker.log
+```
+
+The append-only flag lets the broker add lines and stops anyone but root from changing old ones. Only the broker reads the file, and `bas audit` asks the broker for it.
+
+Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a phone never approves a request on the wrong broker. Then load both daemons.
+
+```sh
+sudo install -d -o root -g wheel -m 0755 /etc/bas
+sudo install -o root -g wheel -m 0644 contrib/macos/broker.toml.example /etc/bas/broker.toml
+sudo install -o root -g wheel -m 0644 contrib/macos/com.snestra.bas.*.plist /Library/LaunchDaemons/
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.snestra.bas.rundir.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.snestra.bas.broker.plist
+curl -s --unix-socket /var/run/bas/broker.sock http://localhost/v1/status
+```
+
+If the broker doesn't start, `/var/log/bas/broker.log` says why. The approval pages listen on `/var/run/bas/approve.sock`, which only `_bas` and root can open. Publish them with Tailscale Serve, which runs as root, as its own service per Mac.
+
+```sh
+sudo tailscale serve --service=svc:bas-mini --https=443 unix:/var/run/bas/approve.sock
+sudo cat /var/db/bas/enroll-url
+```
+
+Enroll the first passkey from that link as in step 7. Install the `ssh-keygen` shim and `10-bas.conf` from `contrib/macos/` as in steps 9 to 11. There is no `gh` shim on macOS: Go programs there check certificates with the system verifier and ignore `SSL_CERT_FILE`, so they can't use the proxy.
+
+To remove the broker, run `sudo launchctl bootout system/com.snestra.bas.broker` and `sudo launchctl bootout system/com.snestra.bas.rundir`, then delete the files above.
+
 ## Try the broker without installing it
 
 A transient unit runs the broker as a throwaway user and leaves nothing behind. Put the program, a `broker.toml`, and a first `seed.toml` policy in `/dev/shm/basdev`, readable by every user, then run the commands below.

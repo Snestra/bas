@@ -466,6 +466,118 @@ impl Policy {
     }
 }
 
+/// What kind of entry a policy table is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// `[secret.NAME]`: a stored value the proxy adds for one host.
+    Secret,
+    /// `[ssh.NAME]`: a key the ssh-agent signs with.
+    Ssh,
+    /// `[github]`: a GitHub App that mints repository tokens.
+    Github,
+    /// `[tailscale]`: an OAuth client that mints API tokens.
+    Tailscale,
+}
+
+impl EntryKind {
+    /// Whether `POST /v1/secrets/NAME/rotate` accepts the entry: a stored value is replaced
+    /// after an approval, and minted tokens are dropped at once.
+    #[must_use]
+    pub fn rotatable(self) -> bool {
+        !matches!(self, Self::Ssh)
+    }
+}
+
+/// One entry of a policy text, for display. It names where values live, never a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntrySummary {
+    /// What kind of table it is.
+    pub kind: EntryKind,
+    /// The policy name: the `NAME` of `[secret.NAME]` or `[ssh.NAME]`, else `github` or
+    /// `tailscale`, which is also what `bas rotate` takes.
+    pub name: String,
+    /// Settings as label and text, in the order the table lists them.
+    pub details: Vec<(String, String)>,
+}
+
+/// Lists the entries of a policy text in the order the broker reads them: secrets, ssh
+/// keys, then `[github]` and `[tailscale]`. Checks only the shape of the text, not its
+/// references or rules.
+///
+/// # Errors
+///
+/// Fails with the TOML parser's message when the text is not a policy.
+pub fn summarize(text: &str) -> Result<Vec<EntrySummary>, String> {
+    let file: PolicyFile = toml::from_str(text).map_err(|err| err.message().to_owned())?;
+    let detail = |label: &str, text: String| (label.to_owned(), text);
+    let mut entries = Vec::new();
+    for (name, secret) in file.secret {
+        let mut details = vec![detail("ref", secret.reference)];
+        if let Some(host) = secret.host {
+            details.push(detail("host", host));
+        }
+        if let Some(header) = secret.header {
+            details.push(detail("header", header));
+        }
+        if let Some(value) = secret.value {
+            details.push(detail("value", value));
+        }
+        if let Some(allow) = secret.allow {
+            details.push(detail("allow", allow.join(", ")));
+        }
+        entries.push(EntrySummary {
+            kind: EntryKind::Secret,
+            name,
+            details,
+        });
+    }
+    for (name, ssh) in file.ssh {
+        entries.push(EntrySummary {
+            kind: EntryKind::Ssh,
+            name,
+            details: vec![
+                detail("ref", ssh.reference),
+                detail("use", ssh.uses.join(", ")),
+            ],
+        });
+    }
+    if let Some(github) = file.github {
+        let mut details = vec![
+            detail("app_id", github.app_id.to_string()),
+            detail("private_key", github.private_key),
+        ];
+        for repo in github.repo {
+            let permissions: Vec<String> = repo
+                .permissions
+                .iter()
+                .map(|(scope, level)| format!("{scope}={level}"))
+                .collect();
+            details.push(detail(
+                "repo",
+                format!("{} ({})", repo.name, permissions.join(", ")),
+            ));
+        }
+        entries.push(EntrySummary {
+            kind: EntryKind::Github,
+            name: "github".to_owned(),
+            details,
+        });
+    }
+    if let Some(tailscale) = file.tailscale {
+        entries.push(EntrySummary {
+            kind: EntryKind::Tailscale,
+            name: "tailscale".to_owned(),
+            details: vec![
+                detail("client_id", tailscale.client_id),
+                detail("client_secret", tailscale.client_secret),
+                detail("scopes", tailscale.scopes.join(", ")),
+                detail("api_allow", tailscale.api_allow.join(", ")),
+            ],
+        });
+    }
+    Ok(entries)
+}
+
 /// SHA-256 of a policy text, in lowercase hex.
 pub fn hash(text: &str) -> String {
     Sha256::digest(text.as_bytes())

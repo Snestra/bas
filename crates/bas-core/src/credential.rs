@@ -24,7 +24,8 @@ pub const AGENT_ACCESS_TOKEN_VAR: &str = "AAC_TOKEN";
 /// profiles.
 pub const SYSTEMD_CREDENTIAL: &str = "bws";
 
-/// Directory where systemd puts the credentials of a service.
+/// Directory where systemd puts the credentials of a service. The broker's launchd plist
+/// on macOS sets it to a directory only the broker's account can read.
 const CREDENTIALS_DIRECTORY_VAR: &str = "CREDENTIALS_DIRECTORY";
 
 /// Bootstrap and pairing credentials that `bas` removes from every child environment.
@@ -157,7 +158,9 @@ pub fn load_environment_token(profile: &ProfileName) -> Result<MachineToken, Err
     MachineToken::parse(SecretText::new(token))
 }
 
-/// Loads the machine token from the systemd credential `bws` for the named profile.
+/// Loads the machine token from the file `bws` in `$CREDENTIALS_DIRECTORY` for the named
+/// profile. systemd fills that directory on Linux, and the broker's launchd plist names it
+/// on macOS.
 ///
 /// # Errors
 ///
@@ -166,8 +169,9 @@ pub fn load_environment_token(profile: &ProfileName) -> Result<MachineToken, Err
 pub fn load_systemd_token(profile: &ProfileName) -> Result<MachineToken, Error> {
     let missing = || {
         Error::new(format!(
-            "profile '{profile}' reads its token from the systemd credential \
-             {SYSTEMD_CREDENTIAL}, which this process was not given"
+            "profile '{profile}' reads its token from the credential \
+             {SYSTEMD_CREDENTIAL} in ${CREDENTIALS_DIRECTORY_VAR}, which this process was not \
+             given"
         ))
     };
     let dir = env::var_os(CREDENTIALS_DIRECTORY_VAR).ok_or_else(missing)?;

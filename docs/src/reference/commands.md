@@ -1,6 +1,6 @@
 # Commands
 
-The list below shows every `bas` command and its options. `bas <command> --help` prints the same options with longer descriptions. Commands marked Linux exist only in the Linux build.
+The list below shows every `bas` command and its options. `bas <command> --help` prints the same options with longer descriptions. Commands marked Linux and macOS exist only in those builds.
 
 ```text
 bas
@@ -15,12 +15,12 @@ bas
 ├── listen                       Agent Access
 ├── pair                         Agent Access
 ├── grant     add, list, revoke  Agent Access
-├── broker                       Linux
-├── add                          Linux
-├── rotate                       Linux
-├── policy    edit               Linux
-├── audit                        Linux
-└── passkey   add                Linux
+├── broker                       Linux and macOS
+├── add                          Linux and macOS
+├── rotate                       Linux and macOS
+├── policy    edit               Linux and macOS
+├── audit                        Linux and macOS
+└── passkey   add                Linux and macOS
 ```
 
 No command prints a secret value. Commands print references, metadata, and receipts.
@@ -34,14 +34,14 @@ No command prints a secret value. Commands print references, metadata, and recei
 | `bas auth list` | | Lists profiles and paired devices without contacting a server |
 | `bas auth logout <PROFILE>` | | Deletes a profile and its stored token. For a direct profile, it also removes its paired devices and revokes its grants. |
 | `bas doctor` | `--profile <PROFILE>` | Reports readiness offline, or also signs in to the profile |
-| `bas tui` | `--profile <PROFILE>` | Opens the terminal UI for secrets and projects, and signs in first when the profile doesn't exist |
+| `bas tui` | `--profile <PROFILE>`, `--broker` (Linux and macOS) | Opens the terminal UI for secrets and projects, and signs in first when the profile doesn't exist. With `--broker`, or with no direct profile while the broker answers, it manages the broker's policy instead, with no token |
 
 ## Secrets
 
 | Command | Options | What it does |
 |---|---|---|
 | `bas find [QUERIES]...` | `--profile <PROFILE>` (required), `--project <UUID>`, `--json` | Lists references whose key contains a query, ignoring case |
-| `bas run -- <COMMAND>...` | `--env <NAME=REFERENCE>` (repeat), `--with <NAME>` (repeat, Linux) | Runs a program with secrets in its environment, or with broker proxy settings |
+| `bas run -- <COMMAND>...` | `--env <NAME=REFERENCE>` (repeat), `--with <NAME>` (repeat, Linux and macOS) | Runs a program with secrets in its environment, or with broker proxy settings |
 | `bas env write <FILE>` | `--env <NAME=REFERENCE>` (repeat), `--force` | Writes a reference template |
 | `bas env run <FILE> -- <COMMAND>...` | | Runs a program with the bindings of a template |
 | `bas create` | `--profile <PROFILE>`, `--key <KEY>`, `--project <UUID>`, and `--stdin` or `--clipboard` | Creates a secret and prints a JSON receipt |
@@ -57,26 +57,27 @@ No command prints a secret value. Commands print references, metadata, and recei
 | `bas grant list` | `--profile <PROFILE>`, `--json` | Lists active and revoked grants |
 | `bas grant revoke <GRANT>` | | Revokes a grant and reports only after the revocation is on disk |
 
-## Broker (Linux)
+## Broker (Linux and macOS)
 
 | Command | Options | What it does |
 |---|---|---|
-| `bas broker` | `--socket <PATH>`, `--ssh-agent-socket <PATH>`, `--config <PATH>`, `--state-dir <PATH>`, `--ca-bundle <PATH>` | Runs the broker, normally as `bas-broker.service` |
+| `bas broker` | `--socket <PATH>`, `--ssh-agent-socket <PATH>`, `--config <PATH>`, `--state-dir <PATH>`, `--ca-bundle <PATH>`, `--audit-log <PATH>` (macOS) | Runs the broker, normally as `bas-broker.service` on Linux or `com.snestra.bas.broker` on macOS |
 | `bas add <NAME>` | `--host <HOST>`, `--allow <METHOD PATH>` (repeat), `--header <HEADER>`, `--value <VALUE>` | Proposes a new proxy secret, whose value you type on the approval page |
 | `bas rotate <NAME>` | | Replaces a stored value from the approval page, or drops minted `github` or `tailscale` tokens |
 | `bas policy edit` | | Opens the policy proposal in an editor, sends it, and waits for the approval |
-| `bas audit` | `--since <SINCE>`, `--name <NAME>`, `--unit <UNIT>`, `--json` | Prints the broker's audit entries from the system journal |
+| `bas audit` | `--since <SINCE>`, `--name <NAME>`, `--unit <UNIT>` (Linux), `--json` | Prints the broker's audit entries: from the system journal on Linux, from the broker on macOS |
 | `bas passkey add` | | Asks an enrolled passkey to approve enrolling one more |
 
-The defaults of `bas broker` match the unit file.
+The defaults of `bas broker` match the unit file on Linux and the LaunchDaemon on macOS.
 
 ```text
-bas broker
-  --socket            /run/bas/broker.sock
-  --ssh-agent-socket  /run/bas/ssh-agent.sock
-  --config            /etc/bas/broker.toml
-  --state-dir         /var/lib/bas
-  --ca-bundle         /run/bas/ca-bundle.pem
+bas broker            Linux                      macOS
+  --socket            /run/bas/broker.sock       /var/run/bas/broker.sock
+  --ssh-agent-socket  /run/bas/ssh-agent.sock    /var/run/bas/ssh-agent.sock
+  --config            /etc/bas/broker.toml       /etc/bas/broker.toml
+  --state-dir         /var/lib/bas               /var/db/bas
+  --ca-bundle         /run/bas/ca-bundle.pem     /var/run/bas/ca-bundle.pem
+  --audit-log         (the journal)              /var/log/bas/audit.jsonl
 ```
 
 ## Errors from the parser

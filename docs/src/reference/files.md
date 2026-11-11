@@ -44,9 +44,22 @@ Machine tokens and Agent Access keys live in the OS credential store, never in t
 | `/run/bas/ssh-agent.sock` | bas, 0666 | The ssh-agent, caller uid checked |
 | `/run/bas/ca-bundle.pem` | bas, 0644 | The system roots plus the proxy's authority |
 
+On macOS the broker runs as the role account `_bas`, and the files move as below. Everything else matches Linux.
+
+| Path | Owner and mode | Holds |
+|---|---|---|
+| `/Library/LaunchDaemons/com.snestra.bas.broker.plist`, `com.snestra.bas.rundir.plist` | root, 0644 | The broker daemon, and the daemon that makes `/var/run/bas` at boot |
+| `/var/db/bas/` | _bas, 0700 | The active policy, passkeys, enrollment link, and proxy authority |
+| `/var/db/bas/credentials/bws` | _bas, 0400 | The machine token |
+| `/var/log/bas/audit.jsonl` | root:_bas, 0660, `sappnd` flag | The audit record, which only the broker reads and only grows |
+| `/var/log/bas/broker.log` | _bas, 0640 | The broker's warnings and start errors |
+| `/var/run/bas/broker.sock`, `ssh-agent.sock` | _bas, 0666 | The socket API and the ssh-agent, caller uid checked |
+| `/var/run/bas/approve.sock` | _bas, 0600 | The approval pages, for `tailscale serve`, which runs as root |
+| `/var/run/bas/ca-bundle.pem` | _bas, 0644 | The system roots plus the proxy's authority |
+
 ## broker.toml
 
-`/etc/bas/broker.toml` holds the settings that belong to one machine and never sync. `contrib/linux/broker.toml.example` is a commented copy.
+`/etc/bas/broker.toml` holds the settings that belong to one machine and never sync. `contrib/linux/broker.toml.example` and `contrib/macos/broker.toml.example` are commented copies.
 
 | Key | Required | Default | Meaning |
 |---|---|---|---|
@@ -56,5 +69,5 @@ Machine tokens and Agent Access keys live in the OS credential store, never in t
 | `[profile]` `organization` | yes | | Organization ID of the machine token |
 | `[profile]` `api-url`, `identity-url` | yes | | Secrets Manager endpoints |
 | `[profile]` `project` | no | | Project where `bas add` creates secrets. Without it, `bas add` is refused. |
-| `[approvals]` `listen` | no | `127.0.0.1:793` | Address of the approval pages, which must be a loopback address |
+| `[approvals]` `listen` | no | `127.0.0.1:793` on Linux, `unix:/var/run/bas/approve.sock` on macOS | Where the approval pages listen: a loopback address, or `unix:` and an absolute path for a socket with mode 0600 |
 | `[approvals]` `origin` | yes | | HTTPS origin of the approval pages, with no path, such as `https://bas.TAILNET.ts.net` |

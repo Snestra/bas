@@ -6,7 +6,7 @@ use bas_core::secrets::{Identifier, Project, Secret, Session};
 use color_eyre::eyre::OptionExt;
 use crossterm::event::Event as CrosstermEvent;
 use futures::{FutureExt, StreamExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::app::Listed;
 
@@ -62,6 +62,9 @@ pub enum AppEvent {
         /// The save request of the secret form that started the write, if one did.
         form: Option<u64>,
     },
+    /// A broker call finished, in broker mode.
+    #[cfg(unix)]
+    Broker(Box<crate::broker::Update>),
     /// Leave the application.
     Quit,
 }
@@ -80,6 +83,24 @@ pub enum WriteOutcome {
 pub struct EventHandler {
     sender: mpsc::UnboundedSender<Event>,
     receiver: mpsc::UnboundedReceiver<Event>,
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "only broker mode, on unix, opens an editor")
+    )]
+    control: mpsc::UnboundedSender<Control>,
+}
+
+/// Requests to the task that reads the terminal.
+#[derive(Debug)]
+#[cfg_attr(
+    not(unix),
+    expect(dead_code, reason = "only broker mode, on unix, opens an editor")
+)]
+enum Control {
+    /// Stop reading the terminal, and answer once reading has stopped.
+    Pause(oneshot::Sender<()>),
+    /// Read the terminal again.
+    Resume,
 }
 
 impl EventHandler {
@@ -90,12 +111,34 @@ impl EventHandler {
     /// Fails when the exit signal handlers cannot be installed.
     pub fn new() -> color_eyre::Result<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
+        let (control, control_receiver) = mpsc::unbounded_channel();
         let actor = EventTask {
             sender: sender.clone(),
+            control: control_receiver,
             exit: ExitSignals::new()?,
         };
         tokio::spawn(actor.run());
-        Ok(Self { sender, receiver })
+        Ok(Self {
+            sender,
+            receiver,
+            control,
+        })
+    }
+
+    /// Stops reading the terminal until [`Self::resume`], so a program started in the
+    /// foreground, such as an editor, gets every key.
+    #[cfg(unix)]
+    pub async fn pause(&self) {
+        let (done, stopped) = oneshot::channel();
+        if self.control.send(Control::Pause(done)).is_ok() {
+            let _ = stopped.await;
+        }
+    }
+
+    /// Reads the terminal again after [`Self::pause`].
+    #[cfg(unix)]
+    pub fn resume(&self) {
+        let _ = self.control.send(Control::Resume);
     }
 
     /// Waits for the next event.
@@ -129,6 +172,7 @@ impl EventHandler {
 /// Reads crossterm events and emits ticks.
 struct EventTask {
     sender: mpsc::UnboundedSender<Event>,
+    control: mpsc::UnboundedReceiver<Control>,
     exit: ExitSignals,
 }
 
@@ -138,27 +182,45 @@ impl EventTask {
         let mut reader = crossterm::event::EventStream::new();
         let mut tick = tokio::time::interval(tick_rate);
         loop {
-            let tick_delay = tick.tick();
-            let crossterm_event = reader.next().fuse();
-            tokio::select! {
-              _ = self.sender.closed() => {
-                break;
-              }
-              () = self.exit.recv() => {
-                self.send(Event::App(AppEvent::Quit));
-              }
-              _ = tick_delay => {
-                self.send(Event::Tick);
-              }
-              event = crossterm_event => match event {
-                Some(Ok(evt)) => self.send(Event::Crossterm(evt)),
-                // The terminal is gone or unreadable, so quit the way `q` does.
-                Some(Err(_)) | None => {
-                  self.send(Event::App(AppEvent::Quit));
-                  break;
+            let step = {
+                let tick_delay = tick.tick();
+                let crossterm_event = reader.next().fuse();
+                tokio::select! {
+                  _ = self.sender.closed() => Step::Stop,
+                  control = self.control.recv() => Step::Control(control),
+                  () = self.exit.recv() => Step::Quit,
+                  _ = tick_delay => Step::Tick,
+                  event = crossterm_event => Step::Terminal(event),
                 }
-              },
             };
+            match step {
+                // Without a control sender the handler is gone.
+                Step::Stop | Step::Control(None) => break,
+                Step::Quit => self.send(Event::App(AppEvent::Quit)),
+                Step::Tick => self.send(Event::Tick),
+                Step::Terminal(Some(Ok(event))) => self.send(Event::Crossterm(event)),
+                // The terminal is gone or unreadable, so quit the way `q` does.
+                Step::Terminal(Some(Err(_)) | None) => {
+                    self.send(Event::App(AppEvent::Quit));
+                    break;
+                }
+                Step::Control(Some(Control::Pause(done))) => {
+                    drop(reader);
+                    let _ = done.send(());
+                    // Ticks and signals wait too; the foreground program owns the terminal.
+                    loop {
+                        match self.control.recv().await {
+                            Some(Control::Resume) => break,
+                            Some(Control::Pause(done)) => {
+                                let _ = done.send(());
+                            }
+                            None => return,
+                        }
+                    }
+                    reader = crossterm::event::EventStream::new();
+                }
+                Step::Control(Some(Control::Resume)) => {}
+            }
         }
     }
 
@@ -166,6 +228,15 @@ impl EventTask {
         // Shutting down drops the receiver, so a failed send is expected then.
         let _ = self.sender.send(event);
     }
+}
+
+/// What woke the event task.
+enum Step {
+    Stop,
+    Quit,
+    Tick,
+    Terminal(Option<std::io::Result<CrosstermEvent>>),
+    Control(Option<Control>),
 }
 
 /// Signals that end the app the same way as `q`, so a copied value is still cleared when the

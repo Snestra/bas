@@ -12,13 +12,14 @@
 //! project = "<project-id>"          # where `bas add` creates secrets
 //!
 //! [approvals]
-//! listen = "127.0.0.1:793"
+//! listen = "127.0.0.1:793"                  # or "unix:/var/run/bas/approve.sock"
 //! origin = "https://bas.example.ts.net"
 //! ```
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bas_core::Uuid;
 use bas_core::profile::{CredentialSource, EndpointFlags, Endpoints, Profile};
@@ -32,7 +33,15 @@ use crate::Error;
 const DEFAULT_PROXY: &str = "127.0.0.1:3128";
 /// Approval page address used when `broker.toml` names none. The port is below 1024, so
 /// only a process with `CAP_NET_BIND_SERVICE` can take it while the broker is down.
+#[cfg(target_os = "linux")]
 const DEFAULT_APPROVALS: &str = "127.0.0.1:793";
+/// Approval page socket used when `broker.toml` names none. macOS does not keep low ports
+/// from other users the way Linux does, so the pages listen on a socket in the broker's
+/// own runtime directory, which no other user can create or replace.
+#[cfg(not(target_os = "linux"))]
+const DEFAULT_APPROVALS: &str = "unix:/var/run/bas/approve.sock";
+/// Prefix of a unix socket path in `approvals.listen`.
+const UNIX_PREFIX: &str = "unix:";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -56,7 +65,7 @@ struct ProfileFile {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct ApprovalsFile {
-    listen: Option<SocketAddr>,
+    listen: Option<String>,
     origin: Url,
 }
 
@@ -68,12 +77,13 @@ pub struct Config {
     /// Loopback address of the HTTPS proxy.
     pub proxy: SocketAddr,
     /// The one Secrets Manager profile the broker reads secrets through. Its token comes
-    /// from the systemd credential `bws`.
+    /// from the file `bws` in `$CREDENTIALS_DIRECTORY`, which systemd fills on Linux and
+    /// the launchd plist names on macOS.
     pub profile: Profile,
     /// Project that `bas add` creates secrets in. Without it, `bas add` is refused.
     pub project: Option<Uuid>,
-    /// Loopback address of the approval pages.
-    pub approvals_listen: SocketAddr,
+    /// Where the approval pages listen.
+    pub approvals_listen: Listen,
     /// HTTPS origin the phone opens the approval pages on. Its host is the WebAuthn
     /// relying party ID.
     pub approvals_origin: Url,
@@ -92,8 +102,15 @@ impl Config {
         }
         let proxy = loopback(file.proxy, DEFAULT_PROXY)
             .ok_or_else(|| invalid("proxy must be a loopback address"))?;
-        let approvals_listen = loopback(file.approvals.listen, DEFAULT_APPROVALS)
-            .ok_or_else(|| invalid("approvals.listen must be a loopback address"))?;
+        let approvals_listen = Listen::parse(
+            file.approvals
+                .listen
+                .as_deref()
+                .unwrap_or(DEFAULT_APPROVALS),
+        )
+        .ok_or_else(|| {
+            invalid("approvals.listen must be a loopback address, or unix: and an absolute path")
+        })?;
         let origin = file.approvals.origin;
         if origin.scheme() != "https"
             || origin.host_str().is_none()
@@ -137,4 +154,33 @@ fn loopback(given: Option<SocketAddr>, default: &str) -> Option<SocketAddr> {
         None => default.parse().ok()?,
     };
     addr.ip().is_loopback().then_some(addr)
+}
+
+/// Where the approval pages listen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listen {
+    /// A loopback address and port.
+    Tcp(SocketAddr),
+    /// A unix socket, mode 0600, for a reverse proxy that runs as root.
+    Unix(PathBuf),
+}
+
+impl Listen {
+    fn parse(text: &str) -> Option<Self> {
+        if let Some(path) = text.strip_prefix(UNIX_PREFIX) {
+            let path = PathBuf::from(path);
+            return path.is_absolute().then_some(Self::Unix(path));
+        }
+        let addr: SocketAddr = text.parse().ok()?;
+        addr.ip().is_loopback().then_some(Self::Tcp(addr))
+    }
+}
+
+impl fmt::Display for Listen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(addr) => write!(f, "{addr}"),
+            Self::Unix(path) => write!(f, "{UNIX_PREFIX}{}", path.display()),
+        }
+    }
 }

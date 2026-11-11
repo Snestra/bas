@@ -1,0 +1,3 @@
+#!/bin/sh
+# git signs commits with ssh-keygen -Y sign. This sends the request to the bas broker agent.
+SSH_AUTH_SOCK=/var/run/bas/ssh-agent.sock exec /usr/bin/ssh-keygen "$@"

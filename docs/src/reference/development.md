@@ -7,8 +7,9 @@ crates/
 ├── bas/          the CLI and the end-to-end runner in examples/e2e
 ├── bas-core/     profiles, references, the credential store, Secrets Manager calls
 ├── bas-tui/      the terminal UI
-└── bas-broker/   the broker, Linux only
+└── bas-broker/   the broker, Linux and macOS
 contrib/linux/    unit, settings, policy example, shims, and ssh config for the broker
+contrib/macos/    LaunchDaemons, settings, policy example, shim, and ssh config for the broker
 docs/             this site, built with mdBook
 ```
 

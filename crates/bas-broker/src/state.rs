@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::mint::Minter;
 use crate::passkeys::Passkeys;
 use crate::policy::{Policy, SecretFile};
+use crate::server::Options;
 use crate::{Error, audit, files, ssh_agent};
 
 /// File name of the active policy in the state directory.
@@ -26,6 +27,9 @@ pub struct Broker {
     pub state_dir: PathBuf,
     /// Bundle file for proxy clients.
     pub ca_bundle: PathBuf,
+    /// Append-only audit file that `GET /v1/audit` reads.
+    #[cfg(not(target_os = "linux"))]
+    pub audit_log: PathBuf,
     /// Secrets Manager session.
     pub session: Session,
     /// Keys the ssh-agent signs with.
@@ -48,11 +52,10 @@ pub struct Applied {
 }
 
 impl Broker {
-    /// Puts the parts together.
+    /// Puts the parts together. The paths come from `options`.
     pub fn new(
         config: Config,
-        state_dir: PathBuf,
-        ca_bundle: PathBuf,
+        options: &Options,
         session: Session,
         policy: Policy,
         keys: Arc<ssh_agent::Keys>,
@@ -60,8 +63,10 @@ impl Broker {
     ) -> Self {
         Self {
             config,
-            state_dir,
-            ca_bundle,
+            state_dir: options.state_dir.clone(),
+            ca_bundle: options.ca_bundle.clone(),
+            #[cfg(not(target_os = "linux"))]
+            audit_log: options.audit_log.clone(),
             minter: Minter::new(session.clone()),
             session,
             keys,

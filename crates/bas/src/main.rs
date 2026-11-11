@@ -3,7 +3,7 @@
 mod agent_access;
 mod approval;
 mod audit;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod broker_commands;
 mod cli;
 mod discover;
@@ -59,7 +59,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 }
 
 fn main() -> ExitCode {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     bas_broker::install_crypto_provider();
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -147,8 +147,8 @@ fn dispatch(command: Command) -> Result<ExitCode> {
                 .parse()?;
             agent_access::pair(name, relay)
         }
-        Command::Tui(args) => tui(args.profile.as_deref()),
-        #[cfg(target_os = "linux")]
+        Command::Tui(args) => tui(&args),
+        #[cfg(unix)]
         Command::Broker(args) => {
             bas_broker::serve(&bas_broker::Options {
                 socket: args.socket,
@@ -156,19 +156,21 @@ fn dispatch(command: Command) -> Result<ExitCode> {
                 config: args.config,
                 state_dir: args.state_dir,
                 ca_bundle: args.ca_bundle,
+                #[cfg(not(target_os = "linux"))]
+                audit_log: args.audit_log,
             })
             .map_err(|err| Error::new(err.to_string()))?;
             Ok(ExitCode::SUCCESS)
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         Command::Add(args) => broker_commands::add(args),
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         Command::Rotate(args) => broker_commands::rotate(&args.name),
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         Command::Policy(cli::PolicyCommand::Edit) => broker_commands::policy_edit(),
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         Command::Audit(args) => broker_commands::audit(args),
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         Command::Passkey(cli::PasskeyCommand::Add) => broker_commands::passkey_add(),
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
@@ -406,10 +408,19 @@ fn login(args: LoginArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Opens the terminal UI on a profile, or on its sign-in screen when the profile is new.
-fn tui(requested: Option<&str>) -> Result<ExitCode> {
+/// Opens the terminal UI on a profile, on its sign-in screen when the profile is new, or on
+/// the broker's policy.
+fn tui(args: &cli::TuiArgs) -> Result<ExitCode> {
+    #[cfg(unix)]
+    if args.broker {
+        return run_tui(bas_tui::Start::Broker(bas_broker::client::socket_path()));
+    }
     let profiles = Profiles::load()?;
-    let name = match requested {
+    #[cfg(unix)]
+    if args.profile.is_none() && profiles.iter().next().is_none() && broker_answers() {
+        return run_tui(bas_tui::Start::Broker(bas_broker::client::socket_path()));
+    }
+    let name = match args.profile.as_deref() {
         Some(raw) => profile_name(raw)?,
         None => default_tui_profile(&profiles)?,
     };
@@ -420,8 +431,25 @@ fn tui(requested: Option<&str>) -> Result<ExitCode> {
     } else {
         bas_tui::Start::SignIn(name)
     };
+    run_tui(start)
+}
+
+fn run_tui(start: bas_tui::Start) -> Result<ExitCode> {
     bas_tui::run(start).map_err(|err| Error::new(format!("{err:#}")))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Whether the broker socket answers a status request within two seconds.
+#[cfg(unix)]
+fn broker_answers() -> bool {
+    let client = bas_broker::client::Client::new(&bas_broker::client::socket_path());
+    runtime().is_ok_and(|runtime| {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), client.status())
+                .await
+                .is_ok_and(|status| status.is_ok())
+        })
+    })
 }
 
 /// The profile `bas tui` opens without --profile: `default`, else the only direct profile,

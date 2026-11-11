@@ -9,7 +9,7 @@
 - [Find and use secrets](getting-started/use-secrets.md)
 - [Create and update secrets](getting-started/create-and-update.md)
 
-# The credential broker on Linux
+# The credential broker
 
 - [How the broker works](broker/overview.md)
 - [Install the broker](broker/install.md)
@@ -27,7 +27,7 @@
 
 # Other platforms
 
-- [macOS and Windows](platforms.md)
+- [macOS and Windows, and the broker on macOS](platforms.md)
 
 # Reference
 

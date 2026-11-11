@@ -97,6 +97,16 @@ jobs:
           if [[ "$BUILD_OS" == Linux ]]; then
             mkdir -p package/contrib
             cp -R contrib/linux package/contrib/
+          elif [[ "$BUILD_OS" == macOS ]]; then
+            mkdir -p package/contrib
+            cp -R contrib/macos package/contrib/
+            plutil -lint contrib/macos/*.plist
+            # The broker runs as _bas from a root-owned file. A library from a
+            # user-owned prefix, such as Homebrew's, would let that user run code in it.
+            if otool -L "target/release/$binary" | grep -E '/(opt/homebrew|usr/local)/'; then
+              echo "bas links a library outside the system" >&2
+              exit 1
+            fi
           fi
           tar -czf "$archive" -C package .
           tar -xzf "$archive" -C extracted

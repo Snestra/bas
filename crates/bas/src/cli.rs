@@ -39,13 +39,14 @@ pub enum Command {
     /// binding to audit.log in BAS_STATE_DIR or the user state directory, and the line never
     /// holds a value. If the audit line can't be written, the program doesn't start.
     ///
-    /// With --with NAME (Linux only), the program never receives the value of the policy
+    /// With --with NAME (Linux and macOS), the program never receives the value of the policy
     /// entry NAME. The bas broker confirms that NAME is a proxy entry, and bas sets
     /// HTTPS_PROXY, https_proxy, SSL_CERT_FILE, CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE,
     /// NODE_EXTRA_CA_CERTS, and GIT_SSL_CAINFO so the program's HTTPS requests go through
     /// the broker's proxy, which adds the credential for the entry's host. The broker
-    /// writes an audit entry to the system journal. BAS_BROKER_SOCKET overrides the socket
-    /// path /run/bas/broker.sock.
+    /// records an audit entry. BAS_BROKER_SOCKET overrides the socket path
+    /// (/run/bas/broker.sock on Linux, /var/run/bas/broker.sock on macOS). Go programs on
+    /// macOS, gh among them, ignore SSL_CERT_FILE and so cannot use the proxy.
     Run(RunArgs),
     /// Write or run reference-only environment templates.
     #[command(subcommand)]
@@ -89,54 +90,62 @@ pub enum Command {
     /// configuration directory.
     #[command(subcommand)]
     Grant(GrantCommand),
-    /// Browse and edit secrets and projects in a terminal UI.
+    /// Browse and edit secrets and projects in a terminal UI, or manage a bas broker's policy.
     ///
     /// Without --profile it opens the profile named default, or the only profile. When the
     /// profile does not exist yet, it asks for a machine token and saves the profile as
     /// `bas auth login` does.
-    Tui(TuiArgs),
-    /// Run the credential broker, normally as the systemd service bas-broker.service.
     ///
-    /// The broker reads the machine token from the systemd credential bws, serves an HTTP
-    /// and JSON API on a unix socket to the uids in broker.toml, runs an HTTPS proxy that
-    /// adds policy credentials to requests for policy hosts, an ssh-agent that signs with
-    /// policy keys, and approval pages where a passkey on your phone approves changes. It
-    /// writes one journal entry with BAS_AUDIT=1 per credential use, change, or refusal.
-    /// Linux only.
-    #[cfg(target_os = "linux")]
+    /// With --broker it manages the policy of the bas broker at BAS_BROKER_SOCKET, or the
+    /// default socket, with no machine token: it lists policy entries without values, and
+    /// adds, rotates, edits, and enrolls passkeys through phone approvals. Without --broker
+    /// or --profile, bas tui opens broker mode when no direct profile exists and the broker
+    /// answers. Broker mode is for Linux and macOS.
+    Tui(TuiArgs),
+    /// Run the credential broker, normally as the systemd service bas-broker.service on
+    /// Linux or the LaunchDaemon com.snestra.bas.broker on macOS.
+    ///
+    /// The broker reads the machine token from the file bws in $CREDENTIALS_DIRECTORY,
+    /// serves an HTTP and JSON API on a unix socket to the uids in broker.toml, runs an
+    /// HTTPS proxy that adds policy credentials to requests for policy hosts, an ssh-agent
+    /// that signs with policy keys, and approval pages where a passkey on your phone
+    /// approves changes. It records one audit entry with BAS_AUDIT=1 per credential use,
+    /// change, or refusal: in the journal on Linux, in an append-only file on macOS.
+    #[cfg(unix)]
     Broker(BrokerArgs),
     /// Propose a new proxy secret. You type its value on the approval page on your phone.
     ///
     /// The broker opens an approval and bas prints its URL, then waits. After the phone
     /// approves, the broker creates the secret in Bitwarden, adds [secret.NAME] to the
     /// active policy, and bas rewrites ~/.config/bas/policy.toml from the active policy.
-    /// The value never passes through this terminal. Linux only.
-    #[cfg(target_os = "linux")]
+    /// The value never passes through this terminal.
+    #[cfg(unix)]
     Add(AddArgs),
     /// Rotate a secret: drop minted tokens at once, or replace a stored value from the phone.
     ///
     /// NAME is a [secret.NAME] entry, whose new value you type on the approval page, or
     /// github or tailscale, whose cached tokens the broker drops so the next request mints
-    /// new ones. Linux only.
-    #[cfg(target_os = "linux")]
+    /// new ones.
+    #[cfg(unix)]
     Rotate(RotateArgs),
     /// Edit the policy proposal and ask your phone to approve it.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[command(subcommand)]
     Policy(PolicyCommand),
-    /// Show the broker's audit entries from the system journal.
+    /// Show the broker's audit entries.
     ///
-    /// Reads `journalctl _SYSTEMD_UNIT=UNIT BAS_AUDIT=1 -o json`. Reading the system journal
-    /// needs membership in the adm or systemd-journal group. Linux only.
-    #[cfg(target_os = "linux")]
+    /// On Linux, reads `journalctl _SYSTEMD_UNIT=UNIT BAS_AUDIT=1 -o json`, which needs
+    /// membership in the adm or systemd-journal group. On macOS, asks the broker, because
+    /// only the broker can read its audit file.
+    #[cfg(unix)]
     Audit(AuditArgs),
     /// Manage the passkeys that approve broker requests.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[command(subcommand)]
     Passkey(PasskeyCommand),
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Args)]
 pub struct AddArgs {
     /// Policy name of the new entry, also the key of the new Bitwarden secret.
@@ -155,14 +164,14 @@ pub struct AddArgs {
     pub allow: Vec<String>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Args)]
 pub struct RotateArgs {
     /// A [secret.NAME] entry, github, or tailscale.
     pub name: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Subcommand)]
 pub enum PolicyCommand {
     /// Open the proposal in $VISUAL or $EDITOR, send it, and wait for the phone.
@@ -175,7 +184,7 @@ pub enum PolicyCommand {
     Edit,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Subcommand)]
 pub enum PasskeyCommand {
     /// Ask an enrolled passkey to approve enrolling one more.
@@ -185,17 +194,18 @@ pub enum PasskeyCommand {
     Add,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Args)]
 pub struct AuditArgs {
-    /// Show entries since this time: a span such as 30m, 1h, or 2d, or anything
-    /// journalctl --since accepts.
+    /// Show entries since this time: a span such as 30m, 1h, or 2d. On Linux also
+    /// anything journalctl --since accepts, on macOS also an RFC 3339 time.
     #[arg(long)]
     pub since: Option<String>,
     /// Show only entries about this policy name.
     #[arg(long)]
     pub name: Option<String>,
     /// Broker unit. Defaults to BAS_BROKER_UNIT, or bas-broker.service.
+    #[cfg(target_os = "linux")]
     #[arg(long)]
     pub unit: Option<String>,
     /// Print each entry as one JSON object per line.
@@ -203,7 +213,7 @@ pub struct AuditArgs {
     pub json: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[derive(Debug, Args)]
 pub struct BrokerArgs {
     /// Unix socket for the API.
@@ -217,18 +227,35 @@ pub struct BrokerArgs {
     pub config: PathBuf,
     /// Private directory for the active policy, the passkeys, and the proxy's certificate
     /// authority.
-    #[arg(long, value_name = "PATH", default_value = "/var/lib/bas")]
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_STATE_DIR)]
     pub state_dir: PathBuf,
     /// File to write with the system roots and the proxy's certificate authority.
-    #[arg(long, value_name = "PATH", default_value = "/run/bas/ca-bundle.pem")]
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CA_BUNDLE)]
     pub ca_bundle: PathBuf,
+    /// Append-only audit file. Root creates it and sets the sappnd flag on it.
+    #[cfg(not(target_os = "linux"))]
+    #[arg(long, value_name = "PATH", default_value = "/var/log/bas/audit.jsonl")]
+    pub audit_log: PathBuf,
 }
+
+#[cfg(target_os = "linux")]
+const DEFAULT_STATE_DIR: &str = "/var/lib/bas";
+#[cfg(not(target_os = "linux"))]
+const DEFAULT_STATE_DIR: &str = "/var/db/bas";
+#[cfg(target_os = "linux")]
+const DEFAULT_CA_BUNDLE: &str = "/run/bas/ca-bundle.pem";
+#[cfg(not(target_os = "linux"))]
+const DEFAULT_CA_BUNDLE: &str = "/var/run/bas/ca-bundle.pem";
 
 #[derive(Debug, Args)]
 pub struct TuiArgs {
     /// Direct profile to open, or to create on the sign-in screen.
     #[arg(long)]
     pub profile: Option<String>,
+    /// Manage the bas broker's policy instead of a direct profile.
+    #[cfg(unix)]
+    #[arg(long, conflicts_with = "profile")]
+    pub broker: bool,
 }
 
 #[derive(Debug, Subcommand)]

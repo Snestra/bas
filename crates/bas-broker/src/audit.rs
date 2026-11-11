@@ -1,8 +1,15 @@
-//! Journal entries for every credential the broker hands out, adds, or refuses.
+//! Audit entries for every credential the broker hands out, adds, or refuses.
 //!
 //! Each audit entry carries `BAS_AUDIT=1` and `EVENT`, plus `NAME`, `PEER_UID`, `PEER_PID`,
-//! `HOST`, `APPROVAL_ID`, and `CLAIMED_ARGV` where they apply. journald adds `_SYSTEMD_UNIT` itself, so a
-//! client cannot forge an entry for the broker's unit. No entry ever holds a value.
+//! `HOST`, `APPROVAL_ID`, and `CLAIMED_ARGV` where they apply. No entry ever holds a value.
+//!
+//! On Linux the entries go to the system journal. journald adds `_SYSTEMD_UNIT` itself, so a
+//! client cannot forge an entry for the broker's unit.
+//!
+//! On macOS they go to an append-only file, one JSON object per line, with the same fields
+//! in lowercase. Root owns the file and sets the system append-only flag on it, so the
+//! broker can add lines but cannot change old ones, and other users cannot read it.
+//! `GET /v1/audit` serves its lines to allowed callers.
 
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
@@ -11,21 +18,92 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::Error;
 
-/// Sends `tracing` events to the journal: this crate's at info level and above, every other
-/// crate's at warn level and above, so libraries never log request details.
+/// This crate's events at info level and above, every other crate's at warn level and
+/// above, so libraries never log request details.
+fn targets() -> Targets {
+    Targets::new()
+        .with_target(env!("CARGO_CRATE_NAME"), Level::INFO)
+        .with_default(Level::WARN)
+}
+
+/// Sends `tracing` events to the journal.
+#[cfg(target_os = "linux")]
 pub fn init() -> Result<(), Error> {
     let journald = tracing_journald::layer()
         .map_err(|err| Error::new(format!("could not open the system journal: {err}")))?
         .with_field_prefix(None)
         .with_syslog_identifier("bas-broker".to_owned());
-    let filter = Targets::new()
-        .with_target(env!("CARGO_CRATE_NAME"), Level::INFO)
-        .with_default(Level::WARN);
     tracing_subscriber::registry()
         .with(journald)
-        .with(filter)
+        .with(targets())
         .try_init()
         .map_err(|_| Error::new("could not install the journal logger"))
+}
+
+/// Appends this crate's events to the audit file at `path`, one JSON object per line, and
+/// writes every crate's warnings to standard error, which launchd keeps in a log file.
+#[cfg(not(target_os = "linux"))]
+pub fn init(path: &std::path::Path) -> Result<(), Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::Mutex;
+    use tracing_subscriber::Layer;
+
+    // O_APPEND is required by the append-only flag, and each line is one write.
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o640)
+        .open(path)
+        .map_err(|err| crate::files::file_error("open", path, &err))?;
+    let record = tracing_subscriber::fmt::layer()
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(Mutex::new(file))
+        .with_filter(Targets::new().with_target(env!("CARGO_CRATE_NAME"), Level::INFO));
+    let stderr = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .with_filter(Targets::new().with_default(Level::WARN));
+    tracing_subscriber::registry()
+        .with(record)
+        .with(stderr)
+        .with(targets())
+        .try_init()
+        .map_err(|_| Error::new("could not install the audit logger"))
+}
+
+/// Audit entries from the file at `path`, oldest first: each line that carries
+/// `bas_audit`, written at or after `since`, and about `name` when one is given.
+#[cfg(not(target_os = "linux"))]
+pub fn read(
+    path: &std::path::Path,
+    since: Option<time::OffsetDateTime>,
+    name: Option<&str>,
+) -> Result<Vec<serde_json::Value>, Error> {
+    use time::format_description::well_known::Rfc3339;
+
+    let text = std::fs::read_to_string(path)
+        .map_err(|err| crate::files::file_error("read", path, &err))?;
+    let entries = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| entry.get("bas_audit").is_some())
+        .filter(|entry| {
+            name.is_none_or(|name| entry.get("name").and_then(|n| n.as_str()) == Some(name))
+        })
+        .filter(|entry| {
+            since.is_none_or(|since| {
+                entry
+                    .get("timestamp")
+                    .and_then(|time| time.as_str())
+                    .and_then(|time| time::OffsetDateTime::parse(time, &Rfc3339).ok())
+                    .is_some_and(|time| time >= since)
+            })
+        })
+        .collect();
+    Ok(entries)
 }
 
 /// The process on the other end of a socket connection, as the kernel reports it.

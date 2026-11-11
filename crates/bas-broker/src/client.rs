@@ -1,5 +1,6 @@
 //! The client side of the socket API, used by `bas run --with`, `bas add`, `bas rotate`,
-//! `bas policy edit`, and `bas passkey add`.
+//! `bas policy edit`, `bas passkey add`, `bas audit` on macOS, and `bas tui` in broker
+//! mode.
 
 use std::path::{Path, PathBuf};
 
@@ -11,16 +12,16 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::net::UnixStream;
 
-use crate::Error;
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalState, DEFAULT_SOCKET, PolicyProposal, Refusal,
-    RunReply, RunRequest,
+    Accepted, ActivePolicy, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET, PolicyProposal,
+    Refusal, RunReply, RunRequest, Status,
 };
+use crate::{Error, ErrorKind};
 
 /// Environment variable that points `bas` at another broker socket, for development.
 pub const SOCKET_VAR: &str = "BAS_BROKER_SOCKET";
 
-/// The broker socket: `$BAS_BROKER_SOCKET`, or `/run/bas/broker.sock`.
+/// The broker socket: `$BAS_BROKER_SOCKET`, or [`DEFAULT_SOCKET`].
 pub fn socket_path() -> PathBuf {
     std::env::var_os(SOCKET_VAR).map_or_else(|| PathBuf::from(DEFAULT_SOCKET), PathBuf::from)
 }
@@ -44,6 +45,40 @@ impl Client {
     pub fn new(socket: &Path) -> Self {
         Self {
             socket: socket.to_path_buf(),
+        }
+    }
+
+    /// The socket this client talks to.
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    /// The broker's version, policy hash, and pending requests.
+    pub async fn status(&self) -> Result<Status, Error> {
+        match self.call::<(), _>(Method::GET, "/v1/status", None).await? {
+            Outcome::Done(status) => Ok(status),
+            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+        }
+    }
+
+    /// Audit entries at or after `since` (RFC 3339), about `name` when given. Only the
+    /// macOS broker serves them. The Linux broker writes to the journal instead.
+    pub async fn audit(
+        &self,
+        since: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<AuditEntries, Error> {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        if let Some(since) = since {
+            query.append_pair("since", since);
+        }
+        if let Some(name) = name {
+            query.append_pair("name", name);
+        }
+        let path = format!("/v1/audit?{}", query.finish());
+        match self.call::<(), _>(Method::GET, &path, None).await? {
+            Outcome::Done(entries) => Ok(entries),
+            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
         }
     }
 
@@ -108,10 +143,13 @@ impl Client {
         body: Option<&B>,
     ) -> Result<Outcome<T>, Error> {
         let unreachable = |err: &dyn std::fmt::Display| {
-            Error::new(format!(
-                "could not reach the bas broker at {}: {err}",
-                self.socket.display()
-            ))
+            Error::with_kind(
+                format!(
+                    "could not reach the bas broker at {}: {err}",
+                    self.socket.display()
+                ),
+                ErrorKind::Unreachable,
+            )
         };
         let stream = UnixStream::connect(&self.socket)
             .await
@@ -143,7 +181,12 @@ impl Client {
             .await
             .map_err(|err| unreachable(&err))?
             .to_bytes();
-        let unreadable = || Error::new("the bas broker sent a reply bas could not read");
+        let unreadable = || {
+            Error::with_kind(
+                "the bas broker sent a reply bas could not read",
+                ErrorKind::Unreachable,
+            )
+        };
         match status {
             StatusCode::OK => serde_json::from_slice(&body)
                 .map(Outcome::Done)
@@ -158,10 +201,13 @@ impl Client {
 
 fn refused(status: StatusCode, body: &[u8]) -> Error {
     let Ok(refusal) = serde_json::from_slice::<Refusal>(body) else {
-        return Error::new(format!(
-            "the bas broker refused the request (HTTP {})",
-            status.as_u16()
-        ));
+        return Error::with_kind(
+            format!(
+                "the bas broker refused the request (HTTP {})",
+                status.as_u16()
+            ),
+            ErrorKind::Refused,
+        );
     };
     let mut message = if refusal.error == "denied" {
         match &refusal.name {
@@ -180,5 +226,5 @@ fn refused(status: StatusCode, body: &[u8]) -> Error {
     if let Some(line) = refusal.line {
         message.push_str(&format!(" (line {line})"));
     }
-    Error::new(message)
+    Error::with_kind(message, ErrorKind::Refused)
 }
