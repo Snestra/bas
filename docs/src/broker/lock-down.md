@@ -44,7 +44,11 @@ id
 
 To use containers as your user afterwards, use rootless Docker or Podman.
 
-## Reach root over Tailscale SSH in check mode
+## Keep an administrator access method
+
+Keep a trusted console or administrator SSH account that agents cannot use. Tailscale is optional. If you do not use Tailscale, skip the commands in the next section and keep your HTTPS reverse proxy configuration writable only by administrators.
+
+### Use Tailscale SSH in check mode
 
 Tailscale SSH in check mode asks you to sign in to Tailscale again in a browser before it opens a root session, and an agent on the host can't do that sign-in. Turn on Tailscale SSH on the host, and add an SSH rule for `root` with `"action": "check"` to the tailnet policy file in the admin console.
 

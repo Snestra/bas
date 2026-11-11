@@ -1,6 +1,7 @@
 name: ci
 
 on:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
@@ -88,6 +89,10 @@ jobs:
           mkdir package extracted
           cp "target/release/$binary" package/
           cp README.md package/
+          if [[ "$BUILD_OS" == Linux ]]; then
+            mkdir -p package/contrib
+            cp -R contrib/linux package/contrib/
+          fi
           tar -czf "$archive" -C package .
           tar -xzf "$archive" -C extracted
           cmp "target/release/$binary" "extracted/$binary"

@@ -24,7 +24,7 @@ flowchart LR
 
 ## Status
 
-`bas` is at v0.3.0, and it isn't ready for production use. Direct access and Agent Access work on Linux, macOS, and Windows. The broker works on Linux with systemd only, and release v0.3.0 doesn't include it yet, so build from source to use it. The source is under the MIT license.
+`bas` v0.4.0 includes the Linux broker, and it isn't ready for production use. Direct access and Agent Access work on Linux, macOS, and Windows. The broker requires Linux with systemd and an HTTPS address for approvals. Tailscale is optional. The source is under the MIT license.
 
 ## Quick start
 

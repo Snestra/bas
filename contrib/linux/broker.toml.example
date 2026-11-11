@@ -17,7 +17,8 @@ api-url = "https://api.bitwarden.com"           # https://api.bitwarden.eu for t
 identity-url = "https://identity.bitwarden.com" # https://identity.bitwarden.eu for the EU region
 project = "<project-id>"                        # where `bas add` creates new secrets
 
-# Approval pages. tailscale serve publishes the listen address at the origin.
+# Approval pages. An HTTPS reverse proxy publishes this address at the origin.
+# Tailscale Serve is optional.
 [approvals]
 listen = "127.0.0.1:793"
 origin = "https://bas.<tailnet>.ts.net"
