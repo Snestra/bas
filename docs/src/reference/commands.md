@@ -25,7 +25,7 @@ bas
 └── passkey   add                Linux and macOS
 ```
 
-Commands print references, metadata, and receipts. Only `bas get` prints a secret value, and only for a reference you allowed with `bas helper allow`.
+Commands print references, metadata, and receipts. Only `bas get` prints a secret value, and only for a reference you allowed with `bas helper allow`, or, on a broker host, a reference in a `[helper.NAME]` entry of the broker's policy.
 
 ## Profiles
 
@@ -46,7 +46,7 @@ Commands print references, metadata, and receipts. Only `bas get` prints a secre
 | `bas run -- <COMMAND>...` | `--env <NAME=REFERENCE>` (repeat), `--with <NAME>` (repeat, Linux and macOS) | Runs a program with secrets in its environment, or with broker proxy settings |
 | `bas get <REFERENCE>` | | Prints the raw value of an allowed reference with no trailing newline, for credential helpers. Refuses when stdout is a terminal |
 | `bas helper allow <REFERENCE>` | | Lets `bas get` print the reference, after you type a one-time code on the terminal |
-| `bas helper list` | `--json` | Lists the references `bas get` may print |
+| `bas helper list` | `--json` | Lists the references `bas get` may print, from the broker's policy on a broker host |
 | `bas helper revoke <REFERENCE>` | | Stops `bas get` from printing the reference |
 | `bas env write <FILE>` | `--env <NAME=REFERENCE>` (repeat), `--force` | Writes a reference template |
 | `bas env run <FILE> -- <COMMAND>...` | | Runs a program with the bindings of a template |

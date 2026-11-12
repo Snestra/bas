@@ -129,6 +129,19 @@ pub fn run(names: &str, peer: Peer, claimed_argv: &str) {
     );
 }
 
+/// Records a value `bas get` received for a `[helper.NAME]` entry.
+pub fn helper(name: &str, peer: Peer) {
+    tracing::info!(
+        bas_audit = 1,
+        event = "helper",
+        name,
+        peer_uid = peer.uid,
+        peer_pid = peer.pid,
+        "sent the value of helper {name} to uid {}",
+        peer.uid
+    );
+}
+
 /// Records one signature the ssh-agent made.
 pub fn sign(name: &str, peer: Peer, purpose: &str) {
     tracing::info!(

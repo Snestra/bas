@@ -6,6 +6,7 @@ The policy is a TOML file that says which credentials the broker may use, and ho
 policy.toml
 ├── version = 1                 required
 ├── [secret.NAME]               zero or more API keys for the proxy
+├── [helper.NAME]               zero or more values that bas get prints
 ├── [ssh.NAME]                  zero or more SSH keys for the ssh-agent
 ├── [github]                    optional GitHub App
 │   └── [[github.repo]]         one per repository
@@ -38,6 +39,21 @@ allow = ["GET /v1/*", "POST /v1/*"]
 | `header` | yes | Header the proxy sets, such as `Authorization` or `x-api-key` |
 | `value` | yes | Header value, with `{secret}` exactly once where the stored value goes |
 | `allow` | yes | Requests the proxy lets through, as `"METHOD /path/glob"` |
+
+## [helper.NAME]
+
+A `[helper.NAME]` entry lets `bas get` print one stored value, for a tool that reads a secret from a command's stdout, such as a `"!bas get ..."` key in pi's config or a git credential helper. On a broker host, `bas get` asks the broker, and the broker answers only for references in these entries. `NAME` must be a valid environment variable name.
+
+```toml
+[helper.CLIPROXY_MANAGEMENT_KEY]
+ref = "bas://home/<secret-id>"
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `ref` | yes | Where the value lives in Secrets Manager |
+
+A helper entry is the one way a value leaves the broker. Any process of a user in `allow-uids` can read it with `bas get`, agents included, so add an entry only for a value you accept that they can read. The broker writes a `helper` audit entry for each read, and a `deny` entry for a reference without an entry.
 
 ## Allow patterns
 

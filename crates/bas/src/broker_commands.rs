@@ -1,7 +1,9 @@
-//! `bas add`, `bas rotate`, `bas policy edit`, `bas passkey add`, and `bas audit`: the
-//! commands that talk to the bas broker or read its journal. Linux and macOS.
+//! `bas add`, `bas rotate`, `bas policy edit`, `bas passkey add`, `bas audit`, and the broker
+//! side of `bas get` and `bas helper list`: the commands that talk to the bas broker or read
+//! its journal. Linux and macOS.
 //!
-//! None of them ever handles a secret value. Values are typed on the phone's approval page.
+//! Only `bas get` handles a secret value, the value of a `[helper.NAME]` entry that a
+//! passkey approved. Other values are typed on the phone's approval page.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -11,8 +13,11 @@ use std::process::ExitCode;
 
 use bas_broker::client::{self, Client, Outcome};
 use bas_broker::proposal;
-use bas_broker::protocol::{Accepted, AddSecret, ApprovalState, PolicyProposal, SecretEntry};
-use bas_core::reference::EnvName;
+use bas_broker::protocol::{
+    Accepted, AddSecret, ApprovalState, EntryKind, HelperRequest, PolicyProposal, SecretEntry,
+};
+use bas_core::credential::SecretText;
+use bas_core::reference::{EnvName, SecretRef};
 
 use crate::cli::{AddArgs, AuditArgs};
 use crate::output::{Error, Result};
@@ -28,6 +33,47 @@ const WAIT_SECONDS: u32 = 60;
 
 fn client() -> Client {
     Client::new(&client::socket_path())
+}
+
+/// Whether this machine runs a bas broker. Then `bas get` reads only the `[helper.NAME]`
+/// entries of the broker's policy, because the broker holds the machine token.
+pub fn is_broker_host() -> bool {
+    client::socket_path().exists()
+}
+
+/// Asks the broker for the value of a `[helper.NAME]` entry.
+pub fn helper_value(reference: &SecretRef) -> Result<SecretText> {
+    let request = HelperRequest {
+        reference: reference.to_string(),
+    };
+    let reply = crate::runtime()?
+        .block_on(client().helper(&request))
+        .map_err(|err| {
+            Error::new(format!(
+                "{err}. On a broker host, bas get reads only references in a [helper.NAME] \
+                 table of the broker's policy; add one with `bas policy edit`"
+            ))
+        })?;
+    Ok(SecretText::new(reply.value))
+}
+
+/// The references of the `[helper.NAME]` entries of the broker's active policy.
+pub fn helper_references() -> Result<Vec<String>> {
+    let policy = crate::runtime()?
+        .block_on(client().policy())
+        .map_err(broker_error)?;
+    let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
+    Ok(entries
+        .into_iter()
+        .filter(|entry| entry.kind == EntryKind::Helper)
+        .filter_map(|entry| {
+            entry
+                .details
+                .into_iter()
+                .find(|(label, _)| label == "ref")
+                .map(|(_, reference)| reference)
+        })
+        .collect())
 }
 
 fn broker_error(err: bas_broker::Error) -> Error {

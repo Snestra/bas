@@ -1,5 +1,6 @@
 //! Request and reply bodies of the broker's socket API, shared by the broker and the `bas`
-//! client commands. No body ever holds a secret value.
+//! client commands. Only [`HelperValue`], the reply to `bas get` for a `[helper.NAME]`
+//! entry, holds a secret value.
 
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +89,31 @@ pub struct ProxyInfo {
     pub url: String,
     /// File with the system roots and the proxy's certificate authority.
     pub ca_bundle: String,
+}
+
+/// Body of `POST /v1/helper`, sent by `bas get`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HelperRequest {
+    /// `bas://PROFILE/SECRET-ID` of a `[helper.NAME]` entry of the active policy.
+    pub reference: String,
+}
+
+/// Reply to an allowed `POST /v1/helper`: the raw value, which `bas get` prints for a
+/// credential helper.
+#[derive(Serialize, Deserialize)]
+pub struct HelperValue {
+    /// The `[helper.NAME]` entry that allowed it.
+    pub name: String,
+    /// The secret value.
+    pub value: String,
+}
+
+impl std::fmt::Debug for HelperValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HelperValue")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Body of `POST /v1/secrets`, sent by `bas add`. The value is typed on the approval page.

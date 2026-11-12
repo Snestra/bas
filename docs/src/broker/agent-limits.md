@@ -1,11 +1,12 @@
 # What an agent can and can't do
 
-An agent that runs as your user on a locked-down broker host can use the credentials the policy allows, and it can't read any of their values. The table assumes that every step of [Lock down the host](lock-down.md) is done and that the old copies of each credential are revoked.
+An agent that runs as your user on a locked-down broker host can use the credentials the policy allows, and it can't read any of their values, except the values of `[helper.NAME]` entries. The table assumes that every step of [Lock down the host](lock-down.md) is done and that the old copies of each credential are revoked.
 
 | Credential | Can the agent read the value? | Can the agent use it? |
 |---|---|---|
 | Secrets Manager machine token | No | No. It can only ask the broker for what the policy allows. |
 | API key in a `[secret.NAME]` entry | No | Yes, for the allowed requests to the entry's host |
+| Value in a `[helper.NAME]` entry | Yes, with `bas get` | Yes, anywhere |
 | GitHub App private key | No | No |
 | GitHub installation token, one repository, one hour | No | Yes, for repositories in the policy, with the permissions the policy lists |
 | Tailscale OAuth client ID and secret | No | No |
@@ -34,7 +35,7 @@ The agent can deny a pending request, because denying needs no passkey. A denial
 
 ## What can leak a value anyway
 
-The broker never sends a value to a program, but a host that receives the value can send it back. The proxy doesn't inspect responses. If a policy entry allows a request whose response repeats the request headers, the program reads the credential in the response. Allow only the methods and paths a program needs, and never allow a path that echoes headers, such as `GET /headers` on httpbin.org.
+Apart from `[helper.NAME]` entries, the broker never sends a value to a program, but a host that receives the value can send it back. The proxy doesn't inspect responses. If a policy entry allows a request whose response repeats the request headers, the program reads the credential in the response. Allow only the methods and paths a program needs, and never allow a path that echoes headers, such as `GET /headers` on httpbin.org.
 
 ```text
 on(choose allow patterns)

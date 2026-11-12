@@ -30,8 +30,8 @@ use crate::files::{bind_socket, file_error};
 use crate::passkeys::Passkeys;
 use crate::policy::{self, Policy};
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalLink, PendingRequest, PolicyProposal, ProxyInfo,
-    Refusal, RunReply, RunRequest, Status,
+    Accepted, ActivePolicy, AddSecret, ApprovalLink, HelperRequest, HelperValue, PendingRequest,
+    PolicyProposal, ProxyInfo, Refusal, RunReply, RunRequest, Status,
 };
 use crate::state::{Broker, POLICY_FILE};
 use crate::{Error, pages, proxy, ssh_agent};
@@ -115,6 +115,7 @@ async fn run(options: &Options) -> Result<(), Error> {
     let app = Router::new()
         .route("/v1/status", get(status))
         .route("/v1/run", post(run_request))
+        .route("/v1/helper", post(helper_value))
         .route("/v1/secrets", post(add_secret))
         .route("/v1/secrets/{name}/rotate", post(rotate))
         .route("/v1/policy", get(active_policy).post(propose_policy))
@@ -319,6 +320,41 @@ async fn run_request(
             url: format!("http://{}", broker.config.proxy),
             ca_bundle: broker.ca_bundle.display().to_string(),
         },
+    })
+    .into_response()
+}
+
+/// `bas get`: replies with the value of a `[helper.NAME]` entry. A passkey approved the
+/// entry, so it is the one place a value leaves the broker.
+async fn helper_value(
+    State(broker): State<Arc<Broker>>,
+    Allowed(peer): Allowed,
+    Json(request): Json<HelperRequest>,
+) -> Response {
+    let not_helper = "not a [helper.NAME] entry of the active policy";
+    let Ok(reference) = request.reference.parse::<SecretRef>() else {
+        return refusal(StatusCode::BAD_REQUEST, "not a bas:// reference", None);
+    };
+    let policy = broker.policy();
+    let Some(name) = policy.helper(&reference) else {
+        audit::deny_name(&request.reference, peer, "", not_helper);
+        return refusal(StatusCode::FORBIDDEN, not_helper, None);
+    };
+    let value = match broker.session.get(reference.id).await {
+        Ok(found) => found.into_value(),
+        Err(err) => {
+            tracing::warn!("could not read helper {name}: {err:?}");
+            return refusal(
+                StatusCode::BAD_GATEWAY,
+                "the broker could not read the secret",
+                Some(name),
+            );
+        }
+    };
+    audit::helper(name, peer);
+    Json(HelperValue {
+        name: name.to_owned(),
+        value: value.expose().to_owned(),
     })
     .into_response()
 }

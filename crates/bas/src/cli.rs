@@ -58,10 +58,16 @@ pub enum Command {
     /// approval or a grant on the listener. Before the value is printed, bas appends one
     /// JSON line with the reference and the parent process to audit.log, and the line never
     /// holds the value. If the audit line can't be written, nothing is printed.
+    ///
+    /// On a machine with a bas broker (Linux and macOS), bas get asks the broker instead,
+    /// which answers only for references in a [helper.NAME] table of its policy and records
+    /// each read in its audit log. Add one with `bas policy edit`.
     Get(GetArgs),
     /// Allow, list, and revoke the references that `bas get` may print.
     ///
-    /// The list is stored in helpers.toml in the bas configuration directory.
+    /// The list is stored in helpers.toml in the bas configuration directory. On a machine
+    /// with a bas broker, list shows the [helper.NAME] tables of the broker's policy, and
+    /// allow and revoke refuse, because bas get reads only the broker's policy there.
     #[command(subcommand)]
     Helper(HelperCommand),
     /// Write or run reference-only environment templates.
