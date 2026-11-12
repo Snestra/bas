@@ -11,7 +11,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
 /// Reference-based access to Bitwarden Secrets Manager for coding agents.
 ///
-/// Commands print references, metadata, and receipts, never secret values.
+/// Commands print references, metadata, and receipts, never secret values. The one
+/// exception is `bas get`, for references the operator allowlisted with `bas helper allow`.
 #[derive(Debug, Parser)]
 #[command(name = "bas", version, about, arg_required_else_help = true)]
 pub struct Cli {
@@ -48,6 +49,21 @@ pub enum Command {
     /// (/run/bas/broker.sock on Linux, /var/run/bas/broker.sock on macOS). Go programs on
     /// macOS, gh among them, ignore SSL_CERT_FILE and so cannot use the proxy.
     Run(RunArgs),
+    /// Print the raw value of one allowlisted reference, for credential helpers.
+    ///
+    /// For tools that run a command and read one secret from its stdout, such as pi's
+    /// "!cmd" keys, git credential helpers, and apiKeyHelper. bas prints the value with no
+    /// trailing newline, only when the reference is on the list that `bas helper allow`
+    /// keeps and stdout is not a terminal. References of a remote profile still need
+    /// approval or a grant on the listener. Before the value is printed, bas appends one
+    /// JSON line with the reference and the parent process to audit.log, and the line never
+    /// holds the value. If the audit line can't be written, nothing is printed.
+    Get(GetArgs),
+    /// Allow, list, and revoke the references that `bas get` may print.
+    ///
+    /// The list is stored in helpers.toml in the bas configuration directory.
+    #[command(subcommand)]
+    Helper(HelperCommand),
     /// Write or run reference-only environment templates.
     #[command(subcommand)]
     Env(EnvCommand),
@@ -458,6 +474,38 @@ pub struct RunArgs {
     /// Program and arguments, after --.
     #[arg(last = true, required = true, value_name = "COMMAND")]
     pub command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
+pub struct GetArgs {
+    /// Reference bas://PROFILE/SECRET-ID on the helper allowlist.
+    pub reference: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HelperCommand {
+    /// Let `bas get` print the value of one reference.
+    ///
+    /// Asks you to type a one-time code on the controlling terminal, so a program without
+    /// your terminal cannot add a reference by itself.
+    Allow(HelperReferenceArgs),
+    /// List the references that `bas get` may print.
+    List(HelperListArgs),
+    /// Stop `bas get` from printing the value of one reference.
+    Revoke(HelperReferenceArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct HelperReferenceArgs {
+    /// Reference bas://PROFILE/SECRET-ID.
+    pub reference: String,
+}
+
+#[derive(Debug, Args)]
+pub struct HelperListArgs {
+    /// Print {"helpers":[...]} instead of one reference per line.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]

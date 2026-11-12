@@ -8,11 +8,12 @@
 ~/.config/bas/              BAS_CONFIG_DIR, mode 0700, outside every Git repository
 ├── config.toml             profiles and paired device fingerprints
 ├── grants.toml             grants for paired devices
-├── policy.lock             orders changes to grants and profiles
+├── helpers.toml            references that bas get may print
+├── policy.lock             orders changes to grants, helpers, and profiles
 └── policy.toml             broker policy proposal, on a broker host
 
 ~/.local/state/bas/         BAS_STATE_DIR
-└── audit.log               one JSON line per bas run binding, never a value
+└── audit.log               one JSON line per bas run binding or bas get read, never a value
 ```
 
 The configuration directory and the state directory depend on the platform.
