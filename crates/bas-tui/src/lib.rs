@@ -1,4 +1,6 @@
-//! Terminal UI for Bitwarden Secrets Manager, limited to what a machine account token can do.
+//! Terminal UI for Bitwarden Secrets Manager, limited to what a machine account token can do,
+//! or, in broker mode, for the policy of a bas broker, which needs no token and shows no
+//! value.
 //!
 //! `bas tui` calls [`run`]. Keys are listed inside the app with `?`.
 
@@ -11,6 +13,10 @@ use crate::app::App;
 use crate::event::{AppEvent, EventHandler};
 
 mod app;
+#[cfg(unix)]
+mod broker;
+#[cfg(unix)]
+mod broker_ui;
 mod event;
 mod sign_in;
 mod ui;
@@ -26,6 +32,10 @@ pub enum Start {
     /// Ask for a machine token on a sign-in screen and save it as a new profile of this
     /// name, the same way `bas auth login` does.
     SignIn(ProfileName),
+    /// Manage the policy of the bas broker at this socket. No token is needed, and no
+    /// value is shown.
+    #[cfg(unix)]
+    Broker(std::path::PathBuf),
 }
 
 /// Runs the app in the current terminal until the user quits.
@@ -69,6 +79,10 @@ async fn run_in(terminal: &mut ratatui::DefaultTerminal, start: Start) -> color_
                 ))
             });
             profile
+        }
+        #[cfg(unix)]
+        Start::Broker(socket) => {
+            return broker::BrokerApp::new(&socket, events).run(terminal).await;
         }
         Start::SignIn(name) => {
             let Some(session) = sign_in::run(terminal, &mut events, name).await? else {

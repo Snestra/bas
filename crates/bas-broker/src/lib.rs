@@ -6,12 +6,12 @@
 //! each caller by the kernel's peer credentials; an HTTPS proxy on a loopback port that adds
 //! a credential to requests for hosts named in the active policy; an ssh-agent that signs
 //! with policy keys; and approval pages where a passkey on the phone approves changes. No
-//! credential value ever leaves it. Each use, change, and refusal is written to the system
-//! journal with `BAS_AUDIT=1`.
+//! credential value ever leaves it. Each use, change, and refusal is recorded with
+//! `BAS_AUDIT=1`: in the system journal on Linux, and in an append-only file on macOS.
 //!
-//! The crate builds only on Linux. On other systems it is empty.
+//! The crate builds on Linux and macOS. On other systems it is empty.
 
-#![cfg(target_os = "linux")]
+#![cfg(unix)]
 
 mod approvals;
 mod audit;
@@ -23,13 +23,14 @@ mod mint;
 mod pages;
 mod passkeys;
 mod policy;
+pub mod proposal;
 pub mod protocol;
 mod proxy;
 mod server;
 mod ssh_agent;
 mod state;
 
-pub use error::Error;
+pub use error::{Error, ErrorKind};
 pub use server::{Options, serve};
 
 /// Makes ring the process-wide rustls crypto provider.

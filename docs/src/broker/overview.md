@@ -1,8 +1,8 @@
 # How the broker works
 
-The `bas` broker runs as a systemd service under a separate system user called `bas`. It holds the credentials in its policy and uses them for your programs, including coding agents, without handing the values to them. Keeping values from agents also needs the host changes in [Lock down the host](lock-down.md), such as removing old profiles and passwordless `sudo`.
+The `bas` broker runs as a service under a separate system user: a systemd service as `bas` on Linux, or a LaunchDaemon as `_bas` on macOS. It holds the credentials in its policy and uses them for your programs, including coding agents, without handing the values to them. Keeping values from agents also needs the host changes in [Lock down the host](lock-down.md), such as removing old profiles and passwordless `sudo`.
 
-The broker runs on Linux with systemd only. On macOS and Windows, use direct access, as [macOS and Windows](../platforms.md) explains.
+The broker runs on Linux with systemd and on macOS. [macOS and Windows](../platforms.md) lists what differs on macOS. On Windows, use direct access.
 
 ## What the broker serves
 
@@ -108,7 +108,7 @@ A request waits up to 15 minutes. The broker keeps pending requests in memory, s
 
 ## What the broker records
 
-The broker writes one entry to the system journal for each credential it uses, each change, and each refusal. Each entry has the field `BAS_AUDIT=1`, and journald adds the unit name itself, so a process of your user can't forge or delete an entry for the broker. `bas audit` prints the entries.
+The broker writes one entry for each credential it uses, each change, and each refusal. Each entry has the field `BAS_AUDIT=1`. On Linux the entries go to the system journal, and journald adds the unit name itself, so a process of your user can't forge or delete an entry for the broker. On macOS they go to `/var/log/bas/audit.jsonl`, which only the broker can read and only root can shorten. `bas audit` prints the entries.
 
 ```text
 $ bas audit --since 10m

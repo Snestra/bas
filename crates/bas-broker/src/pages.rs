@@ -1,5 +1,6 @@
-//! Approval pages on a loopback port below 1024, published to the phone with `tailscale
-//! serve`.
+//! Approval pages, published to the phone with `tailscale serve`. On Linux they listen on
+//! a loopback port below 1024. On macOS they listen on a unix socket, mode 0600, in the
+//! broker's runtime directory, which tailscaled reaches because it runs as root.
 //!
 //! - `GET /` lists pending requests.
 //! - `GET /a/ID` shows one request. The broker writes all of the text from what it
@@ -16,7 +17,6 @@
 //! cannot deny requests or start ceremonies from the phone's browser.
 
 use std::fmt::Write as _;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -37,6 +37,8 @@ use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 use zeroize::Zeroizing;
 
 use crate::approvals::{self, Kind, Outcome, View};
+use crate::config::Listen;
+use crate::files::bind_socket;
 use crate::passkeys::Refused;
 use crate::state::Broker;
 use crate::{Error, audit};
@@ -47,14 +49,11 @@ const MAX_VALUE: usize = 64 * 1024;
 const SCRIPT: &str = include_str!("pages/bas.js");
 const STYLE: &str = include_str!("pages/bas.css");
 
-/// Binds the approval port and returns the future that serves it.
+/// Binds the approval port or socket and returns the future that serves it.
 pub async fn start(
-    addr: SocketAddr,
+    listen: &Listen,
     broker: Arc<Broker>,
 ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|err| Error::new(format!("could not listen on {addr}: {err}")))?;
     let app = Router::new()
         .route("/", get(index))
         .route("/bas.js", get(script))
@@ -67,11 +66,20 @@ pub async fn start(
         .route("/enroll/{token}/begin", post(enroll_begin))
         .route("/enroll/{token}/finish", post(enroll_finish))
         .with_state(broker);
-    Ok(async move {
-        axum::serve(listener, app)
-            .await
-            .map_err(|err| Error::new(format!("the approval pages stopped: {err}")))
-    })
+    let stopped = |err: std::io::Error| Error::new(format!("the approval pages stopped: {err}"));
+    let served: std::pin::Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> = match listen {
+        Listen::Tcp(addr) => {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|err| Error::new(format!("could not listen on {addr}: {err}")))?;
+            Box::pin(async move { axum::serve(listener, app).await.map_err(stopped) })
+        }
+        Listen::Unix(path) => {
+            let listener = bind_socket(path, 0o600)?;
+            Box::pin(async move { axum::serve(listener, app).await.map_err(stopped) })
+        }
+    };
+    Ok(served)
 }
 
 /// Headers every reply carries: no caching, no framing, scripts from this origin only.

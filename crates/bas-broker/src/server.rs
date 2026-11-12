@@ -1,8 +1,7 @@
 //! Starts the broker: loads settings and the active policy, signs in to Secrets Manager,
-//! opens the socket API, the proxy, the ssh-agent, and the approval pages, and tells
-//! systemd it is ready.
+//! opens the socket API, the proxy, the ssh-agent, and the approval pages, and on Linux
+//! tells systemd it is ready.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,12 +26,12 @@ use tokio::signal::unix::{SignalKind, signal};
 use crate::approvals::Kind;
 use crate::audit::{self, Peer};
 use crate::config::Config;
-use crate::files::file_error;
+use crate::files::{bind_socket, file_error};
 use crate::passkeys::Passkeys;
 use crate::policy::{self, Policy};
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalLink, PolicyProposal, ProxyInfo, Refusal, RunReply,
-    RunRequest, Status,
+    Accepted, ActivePolicy, AddSecret, ApprovalLink, PendingRequest, PolicyProposal, ProxyInfo,
+    Refusal, RunReply, RunRequest, Status,
 };
 use crate::state::{Broker, POLICY_FILE};
 use crate::{Error, pages, proxy, ssh_agent};
@@ -43,7 +42,8 @@ const USER_AGENT: &str = concat!("bas-broker/", env!("CARGO_PKG_VERSION"));
 const MAX_WAIT: u64 = 300;
 
 /// Where the broker reads its settings and writes its files. The defaults match the
-/// `bas-broker.service` unit. Other paths are for development.
+/// `bas-broker.service` unit on Linux and the `com.snestra.bas.broker` LaunchDaemon on
+/// macOS. Other paths are for development.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Unix socket for the API. The broker replaces a stale file there.
@@ -53,12 +53,20 @@ pub struct Options {
     /// Machine settings, normally `/etc/bas/broker.toml`.
     pub config: PathBuf,
     /// Private directory for the active policy, the passkeys, and the proxy's certificate
-    /// authority, normally `/var/lib/bas`.
+    /// authority, normally `/var/lib/bas` on Linux and `/var/db/bas` on macOS.
     pub state_dir: PathBuf,
     /// File the broker writes with the system roots and its certificate authority, for
-    /// clients of the proxy, normally `/run/bas/ca-bundle.pem`.
+    /// clients of the proxy, normally `ca-bundle.pem` in the runtime directory.
     pub ca_bundle: PathBuf,
+    /// Append-only audit file, normally `/var/log/bas/audit.jsonl`. Linux uses the
+    /// journal instead.
+    #[cfg(not(target_os = "linux"))]
+    pub audit_log: PathBuf,
 }
+
+/// How long the broker waits for its runtime directory. launchd starts daemons in no
+/// order, so on macOS the directory may appear a moment after the broker starts.
+const RUNTIME_DIR_WAIT: Duration = Duration::from_secs(30);
 
 /// Runs the broker until SIGTERM or SIGINT.
 pub fn serve(options: &Options) -> Result<(), Error> {
@@ -70,7 +78,11 @@ pub fn serve(options: &Options) -> Result<(), Error> {
 }
 
 async fn run(options: &Options) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
     audit::init()?;
+    #[cfg(not(target_os = "linux"))]
+    audit::init(&options.audit_log)?;
+    wait_for_runtime_dir(&options.socket).await?;
     let config = Config::load(&options.config)?;
     let policy = load_policy(&options.state_dir, &config)?;
     let token = credential::load_token(&config.profile)?;
@@ -84,12 +96,11 @@ async fn run(options: &Options) -> Result<(), Error> {
     authority.write_bundle(&options.ca_bundle)?;
 
     let proxy_addr = config.proxy;
-    let approvals_addr = config.approvals_listen;
+    let approvals_listen = config.approvals_listen.clone();
     let allow_uids = config.allow_uids.clone();
     let broker = Arc::new(Broker::new(
         config,
-        options.state_dir.clone(),
-        options.ca_bundle.clone(),
+        options,
         session,
         policy,
         Arc::clone(&keys),
@@ -98,8 +109,9 @@ async fn run(options: &Options) -> Result<(), Error> {
 
     let proxy = proxy::start(proxy_addr, authority, Arc::clone(&broker)).await?;
     let agent = ssh_agent::start(&options.ssh_agent_socket, allow_uids, keys)?;
-    let pages = pages::start(approvals_addr, Arc::clone(&broker)).await?;
-    let listener = bind_socket(&options.socket)?;
+    let pages = pages::start(&approvals_listen, Arc::clone(&broker)).await?;
+    // Open to every local user. The peer check, not the file mode, decides who may use it.
+    let listener = bind_socket(&options.socket, 0o666)?;
     let app = Router::new()
         .route("/v1/status", get(status))
         .route("/v1/run", post(run_request))
@@ -107,7 +119,10 @@ async fn run(options: &Options) -> Result<(), Error> {
         .route("/v1/secrets/{name}/rotate", post(rotate))
         .route("/v1/policy", get(active_policy).post(propose_policy))
         .route("/v1/approvals/{id}", get(approval_state))
-        .route("/v1/passkeys", post(add_passkey))
+        .route("/v1/passkeys", post(add_passkey));
+    #[cfg(not(target_os = "linux"))]
+    let app = app.route("/v1/audit", get(audit_entries));
+    let app = app
         .with_state(Arc::clone(&broker))
         .into_make_service_with_connect_info::<PeerCred>();
     let api = axum::serve(listener, app).into_future();
@@ -120,10 +135,11 @@ async fn run(options: &Options) -> Result<(), Error> {
         socket = %options.socket.display(),
         ssh_agent = %options.ssh_agent_socket.display(),
         proxy = %proxy_addr,
-        approvals = %approvals_addr,
+        approvals = %approvals_listen,
         "bas broker ready"
     );
     // The broker works without systemd too, so a missing notify socket is not an error.
+    #[cfg(target_os = "linux")]
     let _ = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
 
     let result = tokio::select! {
@@ -134,10 +150,29 @@ async fn run(options: &Options) -> Result<(), Error> {
         _ = term.recv() => Ok(()),
         _ = int.recv() => Ok(()),
     };
+    #[cfg(target_os = "linux")]
     let _ = sd_notify::notify(&[sd_notify::NotifyState::Stopping]);
     let _ = std::fs::remove_file(&options.socket);
     let _ = std::fs::remove_file(&options.ssh_agent_socket);
     result
+}
+
+/// Waits until the directory of the API socket exists, for at most [`RUNTIME_DIR_WAIT`].
+async fn wait_for_runtime_dir(socket: &Path) -> Result<(), Error> {
+    let Some(dir) = socket.parent() else {
+        return Ok(());
+    };
+    let deadline = tokio::time::Instant::now() + RUNTIME_DIR_WAIT;
+    while !dir.is_dir() {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "{} does not exist; on macOS the com.snestra.bas.rundir daemon makes it",
+                dir.display()
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Ok(())
 }
 
 /// Reads the active policy from the state directory. Before the first approved change
@@ -160,21 +195,6 @@ fn load_policy(state_dir: &Path, config: &Config) -> Result<Policy, Error> {
             invalid.message
         ))
     })
-}
-
-/// Binds the API socket and opens it to every local user. The peer check, not the file
-/// mode, decides who may use it.
-fn bind_socket(path: &Path) -> Result<UnixListener, Error> {
-    let failed =
-        |err: std::io::Error| Error::new(format!("could not listen on {}: {err}", path.display()));
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(failed(err)),
-    }
-    let listener = UnixListener::bind(path).map_err(failed)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666)).map_err(failed)?;
-    Ok(listener)
 }
 
 /// Peer credentials of a socket connection, read once when it is accepted.
@@ -248,14 +268,25 @@ fn ask_phone(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> R
 }
 
 async fn status(State(broker): State<Arc<Broker>>, Allowed(_): Allowed) -> Json<Status> {
+    let pending = broker.approvals.pending();
     Json(Status {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         policy_hash: broker.policy().hash().to_owned(),
-        pending: broker
-            .approvals
-            .pending()
+        pending: pending
             .iter()
             .map(|view| view.id.hyphenated().to_string())
+            .collect(),
+        requests: pending
+            .iter()
+            .map(|view| PendingRequest {
+                id: view.id.hyphenated().to_string(),
+                kind: view.kind.label().to_owned(),
+                subject: view.kind.subject(),
+                peer_uid: view.peer.uid,
+                created_at: view.created_at.clone(),
+                expires_in: view.expires_in,
+                url: broker.config.approval_url(view.id),
+            })
             .collect(),
     })
 }
@@ -475,5 +506,47 @@ async fn approval_state(
     match broker.approvals.wait(id, wait).await {
         Some(state) => Json(state).into_response(),
         None => refusal(StatusCode::NOT_FOUND, "no such approval", None),
+    }
+}
+
+#[derive(Deserialize)]
+#[cfg(not(target_os = "linux"))]
+struct AuditQuery {
+    /// RFC 3339 time of the oldest entry to return.
+    since: Option<String>,
+    /// Policy name the entries must be about.
+    name: Option<String>,
+}
+
+/// `bas audit` on macOS: the audit file's entries, which the caller cannot read itself.
+#[cfg(not(target_os = "linux"))]
+async fn audit_entries(
+    State(broker): State<Arc<Broker>>,
+    Allowed(_): Allowed,
+    Query(query): Query<AuditQuery>,
+) -> Response {
+    let since = match query.since.as_deref().map(|since| {
+        time::OffsetDateTime::parse(since, &time::format_description::well_known::Rfc3339)
+    }) {
+        None => None,
+        Some(Ok(since)) => Some(since),
+        Some(Err(_)) => {
+            return refusal(
+                StatusCode::BAD_REQUEST,
+                "since must be an RFC 3339 time",
+                None,
+            );
+        }
+    };
+    match audit::read(&broker.audit_log, since, query.name.as_deref()) {
+        Ok(entries) => Json(crate::protocol::AuditEntries { entries }).into_response(),
+        Err(err) => {
+            tracing::warn!("{err}");
+            refusal(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the broker could not read its audit file",
+                None,
+            )
+        }
     }
 }

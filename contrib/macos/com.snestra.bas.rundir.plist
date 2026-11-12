@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- /Library/LaunchDaemons/com.snestra.bas.rundir.plist, owned by root:wheel, mode 0644.
+     macOS empties /var/run at each boot. This makes /var/run/bas for the broker with an
+     Apple program, so no bas code runs as root. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.snestra.bas.rundir</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/install</string>
+    <string>-d</string>
+    <string>-o</string>
+    <string>_bas</string>
+    <string>-g</string>
+    <string>_bas</string>
+    <string>-m</string>
+    <string>0755</string>
+    <string>/var/run/bas</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>

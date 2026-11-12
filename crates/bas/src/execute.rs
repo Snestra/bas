@@ -97,8 +97,8 @@ pub fn run(
     launch(command, program, masker)
 }
 
-/// Proxy settings from the bas broker, which runs only on Linux.
-#[cfg(target_os = "linux")]
+/// Proxy settings from the bas broker, which runs on Linux and macOS.
+#[cfg(unix)]
 mod broker {
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
@@ -159,7 +159,7 @@ mod broker {
 }
 
 /// Stands in for the broker client where there is no broker.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 mod broker {
     use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
@@ -179,7 +179,7 @@ mod broker {
         _arguments: &[OsString],
     ) -> Result<Vec<(&'static str, String)>, Error> {
         Err(Error::usage(
-            "--with needs the bas broker, which runs only on Linux; use --env instead",
+            "--with needs the bas broker, which runs only on Linux and macOS; use --env instead",
         ))
     }
 }

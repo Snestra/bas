@@ -9,7 +9,6 @@
 //! git`. `auth` allows everything else an SSH client signs, which is a login. Every
 //! signature and every refusal is written to the journal.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -112,15 +111,7 @@ pub fn start(
     allow_uids: std::collections::BTreeSet<u32>,
     keys: Arc<Keys>,
 ) -> Result<impl std::future::Future<Output = Result<(), Error>>, Error> {
-    let failed =
-        |err: std::io::Error| Error::new(format!("could not listen on {}: {err}", path.display()));
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(failed(err)),
-    }
-    let listener = UnixListener::bind(path).map_err(failed)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666)).map_err(failed)?;
+    let listener = crate::files::bind_socket(path, 0o666)?;
     let socket = CheckedListener {
         listener,
         allow_uids,

@@ -414,14 +414,14 @@ pub(crate) fn panel(title: &str) -> Block<'static> {
         .border_type(BorderType::Rounded)
 }
 
-fn field_line(label: &str, value: &str) -> Line<'static> {
+pub(crate) fn field_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::raw(format!("{label}: ")).bold(),
         Span::raw(value.to_owned()),
     ])
 }
 
-fn render_list<'a>(
+pub(crate) fn render_list<'a>(
     rows: impl Iterator<Item = ListItem<'a>>,
     selected: usize,
     block: Block<'a>,
@@ -436,7 +436,7 @@ fn render_list<'a>(
     StatefulWidget::render(list, area, buf, &mut state);
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [row] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(area);

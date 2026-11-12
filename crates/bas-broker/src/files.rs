@@ -1,4 +1,4 @@
-//! Private files in the broker's state and runtime directories.
+//! Private files and sockets in the broker's state and runtime directories.
 
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -51,4 +51,19 @@ pub fn replace(path: &Path, contents: &[u8], mode: u32) -> Result<(), Error> {
     }
     write_new(&staged, contents, mode)?;
     std::fs::rename(&staged, path).map_err(|err| file_error("write", path, &err))
+}
+
+/// Binds a unix socket at `path`, replacing a stale file there, and sets `mode` on it.
+/// Must be called inside the async runtime.
+pub fn bind_socket(path: &Path, mode: u32) -> Result<tokio::net::UnixListener, Error> {
+    let failed =
+        |err: std::io::Error| Error::new(format!("could not listen on {}: {err}", path.display()));
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(failed(err)),
+    }
+    let listener = tokio::net::UnixListener::bind(path).map_err(failed)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(failed)?;
+    Ok(listener)
 }

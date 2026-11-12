@@ -308,6 +308,8 @@ impl App {
                 form,
             } => self.on_write_failed(&action, &error, outcome, form),
             AppEvent::Quit => self.running = false,
+            #[cfg(unix)]
+            AppEvent::Broker(_) => {}
         }
         Ok(())
     }

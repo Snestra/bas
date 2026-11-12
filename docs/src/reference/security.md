@@ -20,9 +20,9 @@ The broker keeps values away from your user only if your user has no way to root
 | Show you a false approval page | The configured approval hostname, port 793 below 1024, and an HTTPS reverse proxy controlled only by administrators | A secret typed into a page on another origin |
 | Read a token from `gh` or git | The proxy adds the token, and the program never receives it | None found |
 | Send a credential to another host | Injection for exact policy hosts only, upstream TLS verified, inner `Host` equal to the `CONNECT` host, port 443 only | A policy host whose response repeats the request headers |
-| Forge or delete audit entries | journald sets `_SYSTEMD_UNIT` | Root |
+| Forge or delete audit entries | On Linux, journald sets `_SYSTEMD_UNIT`. On macOS, the audit file is root-owned with the append-only flag and unreadable to your user | Root |
 
-The proxy and the approval pages listen on loopback addresses and don't check the caller's user ID. On a machine with other local users, add a firewall rule that lets only your user and `bas` connect to ports 3128 and 793, for example an nftables rule that matches `meta skuid`.
+The proxy and, on Linux, the approval pages listen on loopback addresses and don't check the caller's user ID. On macOS the approval pages listen on a socket only `_bas` and root can open, and no firewall rule guards the proxy port. On a machine with other local users, add a firewall rule that lets only your user and `bas` connect to ports 3128 and 793, for example an nftables rule that matches `meta skuid`.
 
 The proxy doesn't inspect responses. A host that echoes request headers can return the credential to the program, so keep `allow` patterns narrow.
 

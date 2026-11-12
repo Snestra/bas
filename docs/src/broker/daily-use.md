@@ -8,7 +8,7 @@ On a broker host, you and your agents use five commands. `bas run --with` uses a
 | `bas add NAME --host H --allow "METHOD /path"` | Yes | Creates a secret and a `[secret.NAME]` entry, with a value you type on the approval page |
 | `bas rotate NAME` | Yes for a stored value, no for `github` and `tailscale` | Replaces a stored value, or drops minted tokens |
 | `bas policy edit` | Yes | Sends your edited policy proposal |
-| `bas audit` | No | Prints the broker's journal entries |
+| `bas audit` | No | Prints the broker's audit entries |
 
 ## Use a credential with bas run --with
 
@@ -108,7 +108,7 @@ If the active policy changes while a proposal waits for approval, for example be
 
 ## Read the audit log
 
-`bas audit` reads the broker's entries from the system journal. Reading the system journal needs membership in the `adm` or `systemd-journal` group.
+On Linux, `bas audit` reads the broker's entries from the system journal, which needs membership in the `adm` or `systemd-journal` group. On macOS, `bas audit` asks the broker, because only the broker can read its audit file.
 
 ```sh
 bas audit --since 1h
@@ -129,4 +129,20 @@ bas audit --json --since 30m
 | `enroll` | a passkey was enrolled |
 | `deny` | the broker refused a caller, a name, a request, or an approval |
 
-`--unit` or `BAS_BROKER_UNIT` reads another unit, such as a test unit called `bas-broker-dev`.
+On Linux, `--unit` or `BAS_BROKER_UNIT` reads another unit, such as a test unit called `bas-broker-dev`.
+
+## Manage the policy in bas tui
+
+`bas tui --broker` shows the active policy's entries without any value, and starts the same requests as the commands above. When no direct profile exists and the broker answers, `bas tui` opens this mode by itself. `bas tui --profile NAME` always opens a direct profile.
+
+```text
+bas tui --broker
+├── Policy entries       name, kind, ref, host, header template, allow list
+├── a                    bas add: name, host, header, value template, allow list
+├── r                    bas rotate on the selected entry
+├── e                    bas policy edit: opens the proposal in $VISUAL or $EDITOR
+├── p                    bas passkey add
+└── Requests             sending, pending, approved, done, denied, expired, refused, failed
+```
+
+Each change still waits for a passkey on the approval page, and a new value is typed only there. The requests list also shows requests that other clients left pending, so you can see what waits for your phone. A refused request changed nothing. A failed request either did not reach the broker, or the phone approved it and the broker could not apply it.

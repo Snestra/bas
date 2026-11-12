@@ -1,25 +1,27 @@
 //! `bas add`, `bas rotate`, `bas policy edit`, `bas passkey add`, and `bas audit`: the
-//! commands that talk to the bas broker or read its journal. Linux only.
+//! commands that talk to the bas broker or read its journal. Linux and macOS.
 //!
 //! None of them ever handles a secret value. Values are typed on the phone's approval page.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::process::Command;
+use std::process::ExitCode;
 
 use bas_broker::client::{self, Client, Outcome};
+use bas_broker::proposal;
 use bas_broker::protocol::{Accepted, AddSecret, ApprovalState, PolicyProposal, SecretEntry};
-use bas_core::profile::{config_dir, create_private_dir, replace_private_file};
 use bas_core::reference::EnvName;
 
 use crate::cli::{AddArgs, AuditArgs};
 use crate::output::{Error, Result};
 
-/// The policy proposal in the configuration directory.
-const PROPOSAL_FILE: &str = "policy.toml";
 /// Unit whose journal entries `bas audit` reads by default.
+#[cfg(target_os = "linux")]
 const DEFAULT_UNIT: &str = "bas-broker.service";
 /// Environment variable that names another broker unit, such as a development unit.
+#[cfg(target_os = "linux")]
 const UNIT_VAR: &str = "BAS_BROKER_UNIT";
 /// How long each wait on the broker lasts before bas asks again.
 const WAIT_SECONDS: u32 = 60;
@@ -61,21 +63,12 @@ fn wait(client: &Client, accepted: &Accepted) -> Result<ApprovalState> {
     }
 }
 
-fn proposal_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join(PROPOSAL_FILE))
-}
-
 /// Writes the active policy to the proposal file.
 fn sync_proposal(client: &Client, path: &Path) -> Result<()> {
     let active = crate::runtime()?
         .block_on(client.policy())
         .map_err(broker_error)?;
-    if let Some(dir) = path.parent() {
-        create_private_dir(dir)
-            .map_err(|err| Error::new(format!("could not create {}: {err}", dir.display())))?;
-    }
-    replace_private_file(path, active.toml.as_bytes())
-        .map_err(|err| Error::new(format!("could not write {}: {err}", path.display())))
+    proposal::write(path, &active.toml).map_err(broker_error)
 }
 
 /// `bas add NAME --host H --allow ...`.
@@ -108,7 +101,7 @@ pub fn add(args: AddArgs) -> Result<ExitCode> {
         .and_then(|result| result.get("reference"))
         .and_then(|reference| reference.as_str())
         .unwrap_or("an unknown reference");
-    sync_proposal(&client, &proposal_path()?)?;
+    sync_proposal(&client, &proposal::path().map_err(broker_error)?)?;
     say(&format!("added {} as {reference}", args.name))?;
     Ok(ExitCode::SUCCESS)
 }
@@ -143,29 +136,17 @@ pub fn rotate(name: &str) -> Result<ExitCode> {
 /// `bas policy edit`.
 pub fn policy_edit() -> Result<ExitCode> {
     let client = client();
-    let path = proposal_path()?;
+    let path = proposal::path().map_err(broker_error)?;
     if !path.exists() {
         sync_proposal(&client, &path)?;
     }
-    let editor = std::env::var("VISUAL")
-        .ok()
-        .filter(|editor| !editor.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok())
-        .filter(|editor| !editor.trim().is_empty())
-        .unwrap_or_else(|| "vi".to_owned());
-    // The editor setting may hold arguments, such as "code --wait", so a shell splits it.
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("sh")
-        .arg(&path)
+    let status = proposal::editor(&path)
         .status()
         .map_err(|err| Error::new(format!("could not start the editor: {err}")))?;
     if !status.success() {
         return Err(Error::new("the editor failed; nothing was sent"));
     }
-    let toml = std::fs::read_to_string(&path)
-        .map_err(|err| Error::new(format!("could not read {}: {err}", path.display())))?;
+    let toml = proposal::read(&path).map_err(broker_error)?;
     let outcome = crate::runtime()?
         .block_on(client.propose_policy(&PolicyProposal { toml }))
         .map_err(|err| Error::new(format!("{}: {err}", path.display())))?;
@@ -207,7 +188,86 @@ pub fn passkey_add() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `bas audit`.
+/// `bas audit` on macOS: the broker reads its audit file for the caller.
+#[cfg(not(target_os = "linux"))]
+pub fn audit(args: AuditArgs) -> Result<ExitCode> {
+    let since = args.since.as_deref().map(since_time).transpose()?;
+    let client = client();
+    let reply = crate::runtime()?
+        .block_on(client.audit(since.as_deref(), args.name.as_deref()))
+        .map_err(broker_error)?;
+    let mut stdout = io::stdout().lock();
+    for entry in &reply.entries {
+        let field = |key: &str| {
+            entry
+                .get(key)
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+        };
+        let time = chrono::DateTime::parse_from_rfc3339(field("timestamp"))
+            .map(|time| {
+                time.with_timezone(&chrono::Utc)
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let written = if args.json {
+            let mut object = serde_json::Map::new();
+            object.insert("time".to_owned(), time.into());
+            if let Some(fields) = entry.as_object() {
+                for (key, value) in fields {
+                    let shown =
+                        !matches!(key.as_str(), "timestamp" | "level" | "target" | "bas_audit");
+                    if shown {
+                        let value = match value {
+                            serde_json::Value::String(_) => value.clone(),
+                            other => other.to_string().into(),
+                        };
+                        object.insert(key.clone(), value);
+                    }
+                }
+            }
+            writeln!(stdout, "{}", serde_json::Value::Object(object))
+        } else {
+            writeln!(stdout, "{time}  {:<8} {}", field("event"), field("message"))
+        };
+        written.map_err(|_| Error::new("could not write to stdout"))?;
+    }
+    if reply.entries.is_empty() {
+        eprintln!(
+            "no audit entries from the broker at {}",
+            client.socket().display()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Turns a span such as `30m`, `1h`, or `2d` into the RFC 3339 time that long ago. An RFC
+/// 3339 time passes through.
+#[cfg(not(target_os = "linux"))]
+fn since_time(since: &str) -> Result<String> {
+    if chrono::DateTime::parse_from_rfc3339(since).is_ok() {
+        return Ok(since.to_owned());
+    }
+    let digits = since.trim_end_matches(['s', 'm', 'h', 'd']);
+    let amount = digits
+        .parse::<i64>()
+        .ok()
+        .filter(|_| since.len() - digits.len() == 1);
+    let span = amount.and_then(|amount| match &since[digits.len()..] {
+        "s" => chrono::Duration::try_seconds(amount),
+        "m" => chrono::Duration::try_minutes(amount),
+        "h" => chrono::Duration::try_hours(amount),
+        _ => chrono::Duration::try_days(amount),
+    });
+    let span = span.ok_or_else(|| {
+        Error::usage("--since takes a span such as 30m, 1h, or 2d, or an RFC 3339 time")
+    })?;
+    Ok((chrono::Utc::now() - span).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// `bas audit` on Linux: reads the broker unit's journal entries.
+#[cfg(target_os = "linux")]
 pub fn audit(args: AuditArgs) -> Result<ExitCode> {
     let mut unit = args
         .unit
@@ -285,6 +345,7 @@ pub fn audit(args: AuditArgs) -> Result<ExitCode> {
 
 /// Turns a span such as `30m`, `1h`, or `2d` into journalctl's `-30m`. Anything else
 /// passes through.
+#[cfg(target_os = "linux")]
 fn since_arg(since: &str) -> String {
     let digits = since.trim_end_matches(['s', 'm', 'h', 'd']);
     let unit_len = since.len() - digits.len();

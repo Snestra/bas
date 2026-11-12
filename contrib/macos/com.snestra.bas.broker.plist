@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- /Library/LaunchDaemons/com.snestra.bas.broker.plist, owned by root:wheel, mode 0644.
+     launchd starts the broker as _bas, so the broker never runs as root. The machine
+     token is the file bws in CREDENTIALS_DIRECTORY, which only _bas can read. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.snestra.bas.broker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/bas</string>
+    <string>broker</string>
+  </array>
+  <key>UserName</key>
+  <string>_bas</string>
+  <key>GroupName</key>
+  <string>_bas</string>
+  <key>InitGroups</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CREDENTIALS_DIRECTORY</key>
+    <string>/var/db/bas/credentials</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <!-- 0077 -->
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>WorkingDirectory</key>
+  <string>/var/empty</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/bas/broker.log</string>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>Core</key>
+    <integer>0</integer>
+  </dict>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>Core</key>
+    <integer>0</integer>
+  </dict>
+</dict>
+</plist>

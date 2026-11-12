@@ -4,11 +4,20 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::policy::SecretFile as SecretEntry;
+pub use crate::policy::{EntryKind, EntrySummary, summarize as summarize_policy};
 
 /// Socket the broker listens on unless told otherwise.
+#[cfg(target_os = "linux")]
 pub const DEFAULT_SOCKET: &str = "/run/bas/broker.sock";
+/// Socket the broker listens on unless told otherwise.
+#[cfg(not(target_os = "linux"))]
+pub const DEFAULT_SOCKET: &str = "/var/run/bas/broker.sock";
 /// ssh-agent socket the broker listens on unless told otherwise.
+#[cfg(target_os = "linux")]
 pub const DEFAULT_SSH_AGENT_SOCKET: &str = "/run/bas/ssh-agent.sock";
+/// ssh-agent socket the broker listens on unless told otherwise.
+#[cfg(not(target_os = "linux"))]
+pub const DEFAULT_SSH_AGENT_SOCKET: &str = "/var/run/bas/ssh-agent.sock";
 
 /// Reply to `GET /v1/status`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,6 +28,36 @@ pub struct Status {
     pub policy_hash: String,
     /// IDs of requests that wait for an approval.
     pub pending: Vec<String>,
+    /// The same requests, with what each asks for. Brokers before 0.5 leave it out.
+    #[serde(default)]
+    pub requests: Vec<PendingRequest>,
+}
+
+/// One request that waits for an approval, as `GET /v1/status` lists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequest {
+    /// Approval ID.
+    pub id: String,
+    /// `add`, `rotate`, `policy`, or `passkey`.
+    pub kind: String,
+    /// The policy name for `add` and `rotate`, the proposed policy's hash for `policy`.
+    pub subject: String,
+    /// User ID of the client that asked.
+    pub peer_uid: u32,
+    /// When it was asked, in RFC 3339.
+    pub created_at: String,
+    /// Seconds until it expires.
+    pub expires_in: u64,
+    /// Page to open on the phone.
+    pub url: String,
+}
+
+/// Reply to `GET /v1/audit`, served on macOS, where callers cannot read the audit file.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditEntries {
+    /// One JSON object per audit entry, oldest first, with lowercase field names and a
+    /// `timestamp` in RFC 3339.
+    pub entries: Vec<serde_json::Value>,
 }
 
 /// Body of `POST /v1/run`.
