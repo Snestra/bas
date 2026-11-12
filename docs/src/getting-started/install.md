@@ -25,7 +25,7 @@ on(install bas)
     copy bas onto PATH
 ```
 
-Release v0.4.0 includes the broker commands on Linux. Later releases include them on macOS too. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
+Release v0.4.0 includes the broker commands on Linux, and v0.5.0 adds them on macOS. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
 
 ## Build from source
 
