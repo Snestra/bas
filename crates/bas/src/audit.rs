@@ -89,7 +89,7 @@ pub fn record(variables: &[(&EnvName, Source<'_>)], program: &OsStr) -> Result<(
 /// printed when this fails.
 pub fn record_get(reference: &SecretRef) -> Result<(), Error> {
     let path = path()?;
-    let mut line = serde_json::json!({
+    let line = serde_json::json!({
         "time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "command": "get",
         "reference": reference.to_string(),
@@ -99,15 +99,7 @@ pub fn record_get(reference: &SecretRef) -> Result<(), Error> {
             .unwrap_or_default(),
         "pid": std::process::id(),
     });
-    #[cfg(unix)]
-    {
-        let parent = std::os::unix::process::parent_id();
-        line["parent_pid"] = parent.into();
-        if let Some(program) = parent_program(parent) {
-            line["parent"] = program.into();
-        }
-    }
-    let mut text = line.to_string();
+    let mut text = with_parent(line).to_string();
     text.push('\n');
     append(&path, &text).map_err(|_| {
         Error::new(format!(
@@ -115,6 +107,23 @@ pub fn record_get(reference: &SecretRef) -> Result<(), Error> {
             path.display()
         ))
     })
+}
+
+/// Adds the parent's process ID and executable to an audit line.
+#[cfg(unix)]
+fn with_parent(mut line: serde_json::Value) -> serde_json::Value {
+    let parent = std::os::unix::process::parent_id();
+    line["parent_pid"] = parent.into();
+    if let Some(program) = parent_program(parent) {
+        line["parent"] = program.into();
+    }
+    line
+}
+
+/// Leaves the line unchanged where the standard library can't name the parent process.
+#[cfg(not(unix))]
+fn with_parent(line: serde_json::Value) -> serde_json::Value {
+    line
 }
 
 /// Path of the parent's executable, read from /proc.
