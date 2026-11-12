@@ -7,6 +7,8 @@ bas
 ├── auth      login, status, logout, list
 ├── find
 ├── run
+├── get
+├── helper    allow, list, revoke
 ├── env       write, run
 ├── create
 ├── update
@@ -23,7 +25,7 @@ bas
 └── passkey   add                Linux and macOS
 ```
 
-No command prints a secret value. Commands print references, metadata, and receipts.
+Commands print references, metadata, and receipts. Only `bas get` prints a secret value, and only for a reference you allowed with `bas helper allow`.
 
 ## Profiles
 
@@ -42,6 +44,10 @@ No command prints a secret value. Commands print references, metadata, and recei
 |---|---|---|
 | `bas find [QUERIES]...` | `--profile <PROFILE>` (required), `--project <UUID>`, `--json` | Lists references whose key contains a query, ignoring case |
 | `bas run -- <COMMAND>...` | `--env <NAME=REFERENCE>` (repeat), `--with <NAME>` (repeat, Linux and macOS) | Runs a program with secrets in its environment, or with broker proxy settings |
+| `bas get <REFERENCE>` | | Prints the raw value of an allowed reference with no trailing newline, for credential helpers. Refuses when stdout is a terminal |
+| `bas helper allow <REFERENCE>` | | Lets `bas get` print the reference, after you type a one-time code on the terminal |
+| `bas helper list` | `--json` | Lists the references `bas get` may print |
+| `bas helper revoke <REFERENCE>` | | Stops `bas get` from printing the reference |
 | `bas env write <FILE>` | `--env <NAME=REFERENCE>` (repeat), `--force` | Writes a reference template |
 | `bas env run <FILE> -- <COMMAND>...` | | Runs a program with the bindings of a template |
 | `bas create` | `--profile <PROFILE>`, `--key <KEY>`, `--project <UUID>`, and `--stdin` or `--clipboard` | Creates a secret and prints a JSON receipt |

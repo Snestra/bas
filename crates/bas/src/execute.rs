@@ -198,12 +198,51 @@ fn env_value(name: &EnvName, value: SecretText) -> Result<SecretText, Error> {
 
 /// Retrieves each referenced secret once and returns values in binding order.
 fn resolve(bindings: &[Binding]) -> Result<Vec<SecretText>, Error> {
+    let references: Vec<&SecretRef> = bindings.iter().map(|binding| &binding.reference).collect();
+    let retrieved = retrieve(&references)?;
+    let missing: Vec<String> = bindings
+        .iter()
+        .filter(|binding| !retrieved.contains_key(&binding.reference))
+        .map(|binding| binding.reference.to_string())
+        .collect();
+    if !missing.is_empty() {
+        return Err(Error::new(format!(
+            "not started: no accessible secret for {}",
+            missing.join(", ")
+        )));
+    }
+    bindings
+        .iter()
+        .map(|binding| {
+            let value = &retrieved[&binding.reference];
+            env_value(&binding.name, SecretText::new(value.expose().to_owned()))
+        })
+        .collect()
+}
+
+/// Retrieves one secret for `bas get`, through the same profiles, listener approvals, and
+/// grants as `bas run`.
+///
+/// # Errors
+///
+/// Fails when the profile is not configured, retrieval fails or is denied, or no
+/// accessible secret has this ID.
+pub fn get(reference: &SecretRef) -> Result<SecretText, Error> {
+    retrieve(&[reference])?
+        .remove(reference)
+        .ok_or_else(|| Error::new(format!("no accessible secret for {reference}")))
+}
+
+/// Retrieves each referenced secret once. Direct profiles read from Secrets Manager, and
+/// remote profiles ask their paired listener. Secrets that are missing or denied without
+/// an error are absent from the result.
+fn retrieve(references: &[&SecretRef]) -> Result<BTreeMap<SecretRef, SecretText>, Error> {
     let profiles = Profiles::load()?;
     let mut wanted: BTreeMap<&ProfileName, Vec<Uuid>> = BTreeMap::new();
-    for binding in bindings {
-        let ids = wanted.entry(&binding.reference.profile).or_default();
-        if !ids.contains(&binding.reference.id) {
-            ids.push(binding.reference.id);
+    for reference in references {
+        let ids = wanted.entry(&reference.profile).or_default();
+        if !ids.contains(&reference.id) {
+            ids.push(reference.id);
         }
     }
     let selected = wanted
@@ -242,24 +281,7 @@ fn resolve(bindings: &[Binding]) -> Result<Vec<SecretText>, Error> {
         }
         Ok::<(), Error>(())
     })?;
-    let missing: Vec<String> = bindings
-        .iter()
-        .filter(|binding| !retrieved.contains_key(&binding.reference))
-        .map(|binding| binding.reference.to_string())
-        .collect();
-    if !missing.is_empty() {
-        return Err(Error::new(format!(
-            "not started: no accessible secret for {}",
-            missing.join(", ")
-        )));
-    }
-    bindings
-        .iter()
-        .map(|binding| {
-            let value = &retrieved[&binding.reference];
-            env_value(&binding.name, SecretText::new(value.expose().to_owned()))
-        })
-        .collect()
+    Ok(retrieved)
 }
 
 fn start_error(program: &OsStr, err: &io::Error) -> Error {

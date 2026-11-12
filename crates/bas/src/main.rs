@@ -10,6 +10,7 @@ mod discover;
 mod doctor;
 mod execute;
 mod grant;
+mod helper;
 mod input;
 mod mask;
 mod output;
@@ -17,8 +18,9 @@ mod save;
 mod template;
 
 use std::collections::BTreeSet;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use bas_core::Uuid;
 use bas_core::credential::{self, MachineToken};
@@ -36,9 +38,10 @@ use std::ffi::OsString;
 use crate::agent_access::{Listener, Pairing};
 use crate::cli::{
     AuthCommand, Cli, Command, CreateArgs, DoctorArgs, EnvCommand, FindArgs, GrantAddArgs,
-    GrantCommand, GrantListArgs, ListenArgs, LoginArgs, UpdateArgs,
+    GrantCommand, GrantListArgs, HelperCommand, ListenArgs, LoginArgs, UpdateArgs,
 };
 use crate::grant::{Change, Grant, Policy};
+use crate::helper::Helpers;
 use crate::input::InputSource;
 use crate::output::{EXIT_USAGE, Error, FindReport, GrantReport, Receipt, Result, Status};
 use crate::template::Overwrite;
@@ -110,6 +113,10 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             let brokered = brokered_names(&args.with)?;
             run(&bindings, &brokered, &args.command)
         }
+        Command::Get(args) => get(&args.reference),
+        Command::Helper(HelperCommand::Allow(args)) => helper_allow(&args.reference),
+        Command::Helper(HelperCommand::List(args)) => helper_list(args.json),
+        Command::Helper(HelperCommand::Revoke(args)) => helper_revoke(&args.reference),
         Command::Env(EnvCommand::Write(args)) => {
             let bindings = cli_bindings(&args.bindings)?;
             let overwrite = if args.force {
@@ -186,6 +193,107 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             print_grant(&grant)
         }
     }
+}
+
+/// How long `bas helper allow` waits for the typed code.
+const HELPER_CONFIRM_WINDOW: Duration = Duration::from_secs(120);
+
+/// Prints the raw value of an allowlisted reference with no trailing newline.
+fn get(raw: &str) -> Result<ExitCode> {
+    let reference: SecretRef = raw.parse()?;
+    if io::stdout().is_terminal() {
+        return Err(Error::usage(
+            "bas get prints a secret value, so it refuses to print to a terminal; run it from \
+             a credential helper or redirect its output",
+        ));
+    }
+    if !Helpers::load()?.allows(&reference) {
+        return Err(Error::new(format!(
+            "{reference} is not on the helper allowlist; only you can add it, in a terminal, \
+             with `bas helper allow {reference}`. `bas run` keeps other references masked"
+        )));
+    }
+    let value = execute::get(&reference)?;
+    audit::record_get(&reference)?;
+    let mut out = io::stdout().lock();
+    out.write_all(value.expose().as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(stdout_failed)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Adds a reference to the helper allowlist after the operator types a one-time code on
+/// the controlling terminal.
+fn helper_allow(raw: &str) -> Result<ExitCode> {
+    let reference: SecretRef = raw.parse()?;
+    Profiles::load()?.connection(&reference.profile)?;
+    if Helpers::load()?.allows(&reference) {
+        output::write_error(&format!("{reference} was already allowed"));
+        writeln!(io::stdout().lock(), "allowed {reference}").map_err(stdout_failed)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut terminal = approval::Terminal::open().ok_or_else(|| {
+        Error::usage("bas helper allow needs an interactive terminal to type the confirmation")
+    })?;
+    let code = approval::approval_code();
+    terminal.say(&format!(
+        "bas get will print the value of {reference} to any program that runs it. Each read \
+         is recorded in the audit log."
+    ));
+    let decision = runtime()?.block_on(terminal.confirm(
+        &format!("Type {code} to allow it, or press Enter to cancel:"),
+        &code,
+        tokio::time::Instant::now() + HELPER_CONFIRM_WINDOW,
+    ));
+    if decision != approval::Decision::Approved {
+        return Err(Error::new(format!("{reference} was not allowed")));
+    }
+    let lock = grant::acquire_lock()?;
+    let mut helpers = Helpers::load()?;
+    let change = helpers.insert(reference.clone());
+    if change == Change::Applied {
+        helpers.save(&lock)?;
+    }
+    drop(lock);
+    if change == Change::AlreadyInPlace {
+        output::write_error(&format!("{reference} was already allowed"));
+    }
+    writeln!(io::stdout().lock(), "allowed {reference}").map_err(stdout_failed)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn helper_list(json: bool) -> Result<ExitCode> {
+    let helpers = Helpers::load()?;
+    let references: Vec<&SecretRef> = helpers.references().collect();
+    let mut out = io::stdout().lock();
+    if json {
+        output::write_json(&mut out, &serde_json::json!({ "helpers": references }))
+    } else {
+        references
+            .iter()
+            .try_for_each(|reference| writeln!(out, "{reference}"))
+    }
+    .map_err(stdout_failed)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn helper_revoke(raw: &str) -> Result<ExitCode> {
+    let reference: SecretRef = raw.parse()?;
+    let lock = grant::acquire_lock()?;
+    let mut helpers = Helpers::load()?;
+    let change = helpers.remove(&reference);
+    if change == Change::Applied {
+        helpers.save(&lock)?;
+    }
+    drop(lock);
+    if change == Change::AlreadyInPlace {
+        output::write_error(&format!(
+            "{reference} was not on the helper allowlist; nothing changed"
+        ));
+    } else {
+        writeln!(io::stdout().lock(), "revoked {reference}").map_err(stdout_failed)?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn grant_add(args: GrantAddArgs) -> Result<ExitCode> {
