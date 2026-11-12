@@ -12,6 +12,9 @@
 //! value = "Bearer {secret}"
 //! allow = ["GET /v1/*", "POST /v1/*"]   # method and path globs, default deny
 //!
+//! [helper.CLIPROXY_MANAGEMENT_KEY]
+//! ref = "bas://home/<secret-id>"        # `bas get` prints this value, for credential helpers
+//!
 //! [ssh.git_signing]
 //! ref = "bas://home/<secret-id>"        # an ed25519 or rsa OpenSSH key, no passphrase
 //! use = ["sign-git"]                    # sign-git, auth, or both
@@ -59,6 +62,8 @@ struct PolicyFile {
     #[serde(default)]
     secret: BTreeMap<String, SecretFile>,
     #[serde(default)]
+    helper: BTreeMap<String, HelperFile>,
+    #[serde(default)]
     ssh: BTreeMap<String, SshFile>,
     github: Option<GithubFile>,
     tailscale: Option<TailscaleFile>,
@@ -81,6 +86,13 @@ pub struct SecretFile {
     pub value: Option<String>,
     /// `METHOD /path/glob` entries.
     pub allow: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelperFile {
+    #[serde(rename = "ref")]
+    reference: String,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +146,7 @@ pub struct Policy {
     text: String,
     hash: String,
     secrets: BTreeMap<String, Secret>,
+    helpers: BTreeMap<String, SecretRef>,
     ssh: BTreeMap<String, SshKey>,
     github: Option<Github>,
     tailscale: Option<Tailscale>,
@@ -358,6 +371,18 @@ impl Policy {
             );
         }
 
+        let mut helpers = BTreeMap::new();
+        for (name, entry) in file.helper {
+            let table = format!("[helper.{name}]");
+            name.parse::<EnvName>().map_err(|_| {
+                at(
+                    &table,
+                    format!("helper.{name}: the name must be a valid environment variable name"),
+                )
+            })?;
+            helpers.insert(name, reference(&entry.reference, &table, "ref")?);
+        }
+
         let mut ssh = BTreeMap::new();
         for (name, entry) in file.ssh {
             let table = format!("[ssh.{name}]");
@@ -392,6 +417,7 @@ impl Policy {
             text: text.to_owned(),
             hash: hash(text),
             secrets,
+            helpers,
             ssh,
             github,
             tailscale,
@@ -411,6 +437,15 @@ impl Policy {
     /// The entry for a policy name.
     pub fn secret(&self, name: &str) -> Option<&Secret> {
         self.secrets.get(name)
+    }
+
+    /// The name of the `[helper.NAME]` entry whose value `bas get` may print for this
+    /// reference, or `None` when no entry has it.
+    pub fn helper(&self, reference: &SecretRef) -> Option<&str> {
+        self.helpers
+            .iter()
+            .find(|(_, helper)| *helper == reference)
+            .map(|(name, _)| name.as_str())
     }
 
     /// `[ssh.NAME]` entries.
@@ -471,6 +506,8 @@ impl Policy {
 pub enum EntryKind {
     /// `[secret.NAME]`: a stored value the proxy adds for one host.
     Secret,
+    /// `[helper.NAME]`: a stored value that `bas get` prints, for credential helpers.
+    Helper,
     /// `[ssh.NAME]`: a key the ssh-agent signs with.
     Ssh,
     /// `[github]`: a GitHub App that mints repository tokens.
@@ -484,7 +521,7 @@ impl EntryKind {
     /// after an approval, and minted tokens are dropped at once.
     #[must_use]
     pub fn rotatable(self) -> bool {
-        !matches!(self, Self::Ssh)
+        !matches!(self, Self::Ssh | Self::Helper)
     }
 }
 
@@ -500,8 +537,8 @@ pub struct EntrySummary {
     pub details: Vec<(String, String)>,
 }
 
-/// Lists the entries of a policy text in the order the broker reads them: secrets, ssh
-/// keys, then `[github]` and `[tailscale]`. Checks only the shape of the text, not its
+/// Lists the entries of a policy text in the order the broker reads them: secrets,
+/// helpers, ssh keys, then `[github]` and `[tailscale]`. Checks only the shape of the text, not its
 /// references or rules.
 ///
 /// # Errors
@@ -529,6 +566,13 @@ pub fn summarize(text: &str) -> Result<Vec<EntrySummary>, String> {
             kind: EntryKind::Secret,
             name,
             details,
+        });
+    }
+    for (name, helper) in file.helper {
+        entries.push(EntrySummary {
+            kind: EntryKind::Helper,
+            name,
+            details: vec![detail("ref", helper.reference)],
         });
     }
     for (name, ssh) in file.ssh {

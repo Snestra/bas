@@ -1,4 +1,4 @@
-//! The client side of the socket API, used by `bas run --with`, `bas add`, `bas rotate`,
+//! The client side of the socket API, used by `bas run --with`, `bas get`, `bas add`, `bas rotate`,
 //! `bas policy edit`, `bas passkey add`, `bas audit` on macOS, and `bas tui` in broker
 //! mode.
 
@@ -13,8 +13,8 @@ use serde::de::DeserializeOwned;
 use tokio::net::UnixStream;
 
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET, PolicyProposal,
-    Refusal, RunReply, RunRequest, Status,
+    Accepted, ActivePolicy, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET, HelperRequest,
+    HelperValue, PolicyProposal, Refusal, RunReply, RunRequest, Status,
 };
 use crate::{Error, ErrorKind};
 
@@ -85,6 +85,14 @@ impl Client {
     /// Asks the broker whether `request.names` are proxy entries, and where the proxy is.
     pub async fn run(&self, request: &RunRequest) -> Result<RunReply, Error> {
         match self.call(Method::POST, "/v1/run", Some(request)).await? {
+            Outcome::Done(reply) => Ok(reply),
+            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+        }
+    }
+
+    /// The value of a `[helper.NAME]` entry, for `bas get`.
+    pub async fn helper(&self, request: &HelperRequest) -> Result<HelperValue, Error> {
+        match self.call(Method::POST, "/v1/helper", Some(request)).await? {
             Outcome::Done(reply) => Ok(reply),
             Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
         }

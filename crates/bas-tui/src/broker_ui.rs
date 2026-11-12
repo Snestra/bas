@@ -144,6 +144,9 @@ impl BrokerApp {
                     "r rotate: drops the cached tokens at once; the next request mints new ones"
                 }
                 EntryKind::Ssh => "Replace an ssh key with a policy change (e)",
+                EntryKind::Helper => {
+                    "bas get prints this value; remove it with a policy change (e)"
+                }
             })
             .dim(),
         );
@@ -209,6 +212,7 @@ fn kind_label(kind: EntryKind) -> &'static str {
     match kind {
         EntryKind::Secret => "proxy secret",
         EntryKind::Ssh => "ssh key",
+        EntryKind::Helper => "credential helper",
         EntryKind::Github => "GitHub App",
         EntryKind::Tailscale => "Tailscale OAuth client",
     }

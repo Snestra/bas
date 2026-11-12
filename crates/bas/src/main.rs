@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use bas_core::Uuid;
-use bas_core::credential::{self, MachineToken};
+use bas_core::credential::{self, MachineToken, SecretText};
 use bas_core::login::{self, DEFAULT_PROFILE, LoginRequest};
 use bas_core::profile::{
     Connection, CredentialSource, EndpointFlags, Endpoints, Profiles, RelayUrl,
@@ -207,13 +207,18 @@ fn get(raw: &str) -> Result<ExitCode> {
              a credential helper or redirect its output",
         ));
     }
-    if !Helpers::load()?.allows(&reference) {
-        return Err(Error::new(format!(
-            "{reference} is not on the helper allowlist; only you can add it, in a terminal, \
-             with `bas helper allow {reference}`. `bas run` keeps other references masked"
-        )));
-    }
-    let value = execute::get(&reference)?;
+    let value = if let Some(value) = broker_helper_value(&reference)? {
+        value
+    } else {
+        if !Helpers::load()?.allows(&reference) {
+            return Err(Error::new(format!(
+                "{reference} is not on the helper allowlist; only you can add it, in a \
+                 terminal, with `bas helper allow {reference}`. `bas run` keeps other \
+                 references masked"
+            )));
+        }
+        execute::get(&reference)?
+    };
     audit::record_get(&reference)?;
     let mut out = io::stdout().lock();
     out.write_all(value.expose().as_bytes())
@@ -226,6 +231,7 @@ fn get(raw: &str) -> Result<ExitCode> {
 /// the controlling terminal.
 fn helper_allow(raw: &str) -> Result<ExitCode> {
     let reference: SecretRef = raw.parse()?;
+    refuse_on_broker_host("allow")?;
     Profiles::load()?.connection(&reference.profile)?;
     if Helpers::load()?.allows(&reference) {
         output::write_error(&format!("{reference} was already allowed"));
@@ -262,9 +268,58 @@ fn helper_allow(raw: &str) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Whether this machine runs a bas broker, whose policy then decides what `bas get` prints.
+#[cfg(unix)]
+fn is_broker_host() -> bool {
+    broker_commands::is_broker_host()
+}
+
+/// Only Linux and macOS run a broker.
+#[cfg(not(unix))]
+fn is_broker_host() -> bool {
+    false
+}
+
+/// On a broker host, the value of a `[helper.NAME]` entry of the broker's policy.
+#[cfg(unix)]
+fn broker_helper_value(reference: &SecretRef) -> Result<Option<SecretText>> {
+    if broker_commands::is_broker_host() {
+        broker_commands::helper_value(reference).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Only Linux and macOS run a broker.
+#[cfg(not(unix))]
+fn broker_helper_value(_reference: &SecretRef) -> Result<Option<SecretText>> {
+    Ok(None)
+}
+
+/// Refuses to change the local allowlist on a broker host, where `bas get` ignores it.
+fn refuse_on_broker_host(verb: &str) -> Result<()> {
+    if is_broker_host() {
+        return Err(Error::usage(format!(
+            "this machine runs a bas broker, so bas get reads only [helper.NAME] tables of the \
+             broker's policy, and bas helper {verb} has no effect. Change them with `bas \
+             policy edit`, which your phone approves"
+        )));
+    }
+    Ok(())
+}
+
 fn helper_list(json: bool) -> Result<ExitCode> {
+    #[cfg(unix)]
+    if is_broker_host() {
+        let references = broker_commands::helper_references()?;
+        return print_helpers(json, &references);
+    }
     let helpers = Helpers::load()?;
-    let references: Vec<&SecretRef> = helpers.references().collect();
+    let references: Vec<String> = helpers.references().map(ToString::to_string).collect();
+    print_helpers(json, &references)
+}
+
+fn print_helpers(json: bool, references: &[String]) -> Result<ExitCode> {
     let mut out = io::stdout().lock();
     if json {
         output::write_json(&mut out, &serde_json::json!({ "helpers": references }))
@@ -279,6 +334,7 @@ fn helper_list(json: bool) -> Result<ExitCode> {
 
 fn helper_revoke(raw: &str) -> Result<ExitCode> {
     let reference: SecretRef = raw.parse()?;
+    refuse_on_broker_host("revoke")?;
     let lock = grant::acquire_lock()?;
     let mut helpers = Helpers::load()?;
     let change = helpers.remove(&reference);

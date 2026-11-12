@@ -10,6 +10,8 @@ With direct access, a program that `bas run` starts receives the values in its e
 
 `bas get` prints a raw value, so a program that runs it can read the value. It works only for a reference on the list in `helpers.toml`, and only `bas helper allow` adds to that list after you type a one-time code on the controlling terminal. A program that can't type on your terminal can't add a reference with `bas`. An agent that can write files as your user can still edit `helpers.toml`, as it can edit `grants.toml`, so keep agents out of the configuration directory when that matters. `bas get` refuses when stdout is a terminal, and it appends one line per read to `audit.log` with the reference and the parent process, never the value. A reference of a remote profile still needs approval or a grant on the listener.
 
+On a broker host, the local list has no effect, because your user can edit it. There `bas get` reads only `[helper.NAME]` entries of the broker's policy, which change only after a passkey approval, and the broker records each read in its audit log.
+
 ## The broker
 
 The broker keeps values away from your user only if your user has no way to root. [Lock down the host](../broker/lock-down.md) lists the steps. The table below lists attacks by an agent that runs as your user, what blocks each one, and what risk is left.
