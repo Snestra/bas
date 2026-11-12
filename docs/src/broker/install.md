@@ -19,7 +19,7 @@ contrib/linux/                      installed as
 You need the following:
 
 - A Linux machine with systemd and `systemd-creds`, and an HTTPS reverse proxy for approvals. Tailscale Serve is one option.
-- `bas` v0.4.0 or later, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
+- `bas` v0.4.0 or later on Linux, v0.5.0 or later on macOS, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
 - A Secrets Manager machine account for the broker and an access token for it. Give the account read access to the project that holds the secrets the policy names, and write access to the project where `bas add` should create new secrets.
 - A passkey device, such as a YubiKey or a phone.
 
@@ -107,7 +107,7 @@ curl -s --unix-socket /run/bas/broker.sock http://localhost/v1/status
 The status reply holds the version, the hash of the active policy, and the IDs of pending approvals. Until you approve a first policy, the active policy is empty and allows nothing.
 
 ```text
-{"version":"0.4.0","policy_hash":"<sha-256 of the policy text>","pending":[]}
+{"version":"0.5.0","policy_hash":"<sha-256 of the policy text>","pending":[],"requests":[]}
 ```
 
 If the broker doesn't start, `journalctl -u bas-broker -e` shows why, for example a malformed `broker.toml` or a token that Secrets Manager refused.
