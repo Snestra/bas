@@ -240,11 +240,11 @@ pub struct BrokerArgs {
 
 #[cfg(target_os = "linux")]
 const DEFAULT_STATE_DIR: &str = "/var/lib/bas";
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 const DEFAULT_STATE_DIR: &str = "/var/db/bas";
 #[cfg(target_os = "linux")]
 const DEFAULT_CA_BUNDLE: &str = "/run/bas/ca-bundle.pem";
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 const DEFAULT_CA_BUNDLE: &str = "/var/run/bas/ca-bundle.pem";
 
 #[derive(Debug, Args)]
