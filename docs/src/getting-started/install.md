@@ -25,7 +25,7 @@ on(install bas)
     copy bas onto PATH
 ```
 
-Release v0.4.0 includes the broker commands on Linux, v0.5.0 adds them on macOS, v0.6.0 adds `bas get` for credential helpers, and v0.7.0 lets the broker serve `bas get`. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
+Release v0.4.0 includes the broker commands on Linux, v0.5.0 adds them on macOS, v0.6.0 adds `bas get` for credential helpers, v0.7.0 lets the broker serve `bas get`, and v0.8.0 adds `bas policy show`. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
 
 ## Build from source
 
