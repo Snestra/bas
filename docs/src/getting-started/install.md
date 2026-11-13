@@ -25,7 +25,7 @@ on(install bas)
     copy bas onto PATH
 ```
 
-Release v0.4.0 includes the broker commands on Linux, v0.5.0 adds them on macOS, v0.6.0 adds `bas get` for credential helpers, v0.7.0 lets the broker serve `bas get`, v0.8.0 adds `bas policy show`, v0.8.1 moves to github.com/bjoernaagaard and renames the macOS LaunchDaemons to `io.github.bjoernaagaard.bas.*`, and v0.8.2 makes `bas policy show` list every GitHub repository. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
+Release v0.4.0 includes the broker commands on Linux, v0.5.0 adds them on macOS, v0.6.0 adds `bas get` for credential helpers, v0.7.0 lets the broker serve `bas get`, v0.8.0 adds `bas policy show`, v0.8.1 moves to github.com/bjoernaagaard and renames the macOS LaunchDaemons to `io.github.bjoernaagaard.bas.*`, v0.8.2 makes `bas policy show` list every GitHub repository, and v0.8.3 makes `bas tui` open the broker whenever it answers. The Linux archive includes `contrib/linux/` with the service unit, example settings, and shims, and the macOS archive includes `contrib/macos/` with the LaunchDaemons. Tailscale is optional for all platforms.
 
 ## Build from source
 
