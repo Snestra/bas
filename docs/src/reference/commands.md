@@ -67,7 +67,7 @@ Commands print references, metadata, and receipts. Only `bas get` prints a secre
 
 | Command | Options | What it does |
 |---|---|---|
-| `bas broker` | `--socket <PATH>`, `--ssh-agent-socket <PATH>`, `--config <PATH>`, `--state-dir <PATH>`, `--ca-bundle <PATH>`, `--audit-log <PATH>` (macOS) | Runs the broker, normally as `bas-broker.service` on Linux or `com.snestra.bas.broker` on macOS |
+| `bas broker` | `--socket <PATH>`, `--ssh-agent-socket <PATH>`, `--config <PATH>`, `--state-dir <PATH>`, `--ca-bundle <PATH>`, `--audit-log <PATH>` (macOS) | Runs the broker, normally as `bas-broker.service` on Linux or `io.github.bjoernaagaard.bas.broker` on macOS |
 | `bas add <NAME>` | `--host <HOST>`, `--allow <METHOD PATH>` (repeat), `--header <HEADER>`, `--value <VALUE>` | Proposes a new proxy secret, whose value you type on the approval page |
 | `bas rotate <NAME>` | | Replaces a stored value from the approval page, or drops minted `github` or `tailscale` tokens |
 | `bas policy edit` | | Opens the policy proposal in an editor, sends it, and waits for the approval |

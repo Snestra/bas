@@ -49,7 +49,7 @@ On macOS the broker runs as the role account `_bas`, and the files move as below
 
 | Path | Owner and mode | Holds |
 |---|---|---|
-| `/Library/LaunchDaemons/com.snestra.bas.broker.plist`, `com.snestra.bas.rundir.plist` | root, 0644 | The broker daemon, and the daemon that makes `/var/run/bas` at boot |
+| `/Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist`, `io.github.bjoernaagaard.bas.rundir.plist` | root, 0644 | The broker daemon, and the daemon that makes `/var/run/bas` at boot |
 | `/var/db/bas/` | _bas, 0700 | The active policy, passkeys, enrollment link, and proxy authority |
 | `/var/db/bas/credentials/bws` | _bas, 0400 | The machine token |
 | `/var/log/bas/audit.jsonl` | root:_bas, 0660, `sappnd` flag | The audit record, which only the broker reads and only grows |

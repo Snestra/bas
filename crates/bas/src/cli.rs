@@ -125,7 +125,7 @@ pub enum Command {
     /// answers. Broker mode is for Linux and macOS.
     Tui(TuiArgs),
     /// Run the credential broker, normally as the systemd service bas-broker.service on
-    /// Linux or the LaunchDaemon com.snestra.bas.broker on macOS.
+    /// Linux or the LaunchDaemon io.github.bjoernaagaard.bas.broker on macOS.
     ///
     /// The broker reads the machine token from the file bws in $CREDENTIALS_DIRECTORY,
     /// serves an HTTP and JSON API on a unix socket to the uids in broker.toml, runs an

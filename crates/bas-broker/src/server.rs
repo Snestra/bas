@@ -42,7 +42,7 @@ const USER_AGENT: &str = concat!("bas-broker/", env!("CARGO_PKG_VERSION"));
 const MAX_WAIT: u64 = 300;
 
 /// Where the broker reads its settings and writes its files. The defaults match the
-/// `bas-broker.service` unit on Linux and the `com.snestra.bas.broker` LaunchDaemon on
+/// `bas-broker.service` unit on Linux and the `io.github.bjoernaagaard.bas.broker` LaunchDaemon on
 /// macOS. Other paths are for development.
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -167,7 +167,7 @@ async fn wait_for_runtime_dir(socket: &Path) -> Result<(), Error> {
     while !dir.is_dir() {
         if tokio::time::Instant::now() >= deadline {
             return Err(Error::new(format!(
-                "{} does not exist; on macOS the com.snestra.bas.rundir daemon makes it",
+                "{} does not exist; on macOS the io.github.bjoernaagaard.bas.rundir daemon makes it",
                 dir.display()
             )));
         }

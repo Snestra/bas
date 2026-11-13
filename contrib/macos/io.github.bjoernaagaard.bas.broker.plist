@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- /Library/LaunchDaemons/com.snestra.bas.broker.plist, owned by root:wheel, mode 0644.
+<!-- /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist, owned by root:wheel, mode 0644.
      launchd starts the broker as _bas, so the broker never runs as root. The machine
      token is the file bws in CREDENTIALS_DIRECTORY, which only _bas can read. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.snestra.bas.broker</string>
+  <string>io.github.bjoernaagaard.bas.broker</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/bas</string>

@@ -271,13 +271,13 @@ The audit shows a `run` entry for the first command, a `deny` entry for the seco
 On macOS, a LaunchDaemon runs the broker as the role account `_bas`, and the files come from `contrib/macos/`. Steps 8, 10, and 11 above work the same way with `/var/run/bas/` in place of `/run/bas/`. Run the commands from an admin account, or from a root shell, while no agent runs.
 
 ```text
-contrib/macos/                          installed as
-├── com.snestra.bas.rundir.plist        /Library/LaunchDaemons/com.snestra.bas.rundir.plist
-├── com.snestra.bas.broker.plist        /Library/LaunchDaemons/com.snestra.bas.broker.plist
-├── broker.toml.example                 /etc/bas/broker.toml
-├── policy.toml.example                 ~/.config/bas/policy.toml (your proposal)
-├── shims/ssh-keygen                    /usr/local/lib/bas/shims/ssh-keygen
-└── ssh_config.d/10-bas.conf            /etc/ssh/ssh_config.d/10-bas.conf
+contrib/macos/                                  installed as
+├── io.github.bjoernaagaard.bas.rundir.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.rundir.plist
+├── io.github.bjoernaagaard.bas.broker.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
+├── broker.toml.example                         /etc/bas/broker.toml
+├── policy.toml.example                         ~/.config/bas/policy.toml (your proposal)
+├── shims/ssh-keygen                            /usr/local/lib/bas/shims/ssh-keygen
+└── ssh_config.d/10-bas.conf                    /etc/ssh/ssh_config.d/10-bas.conf
 ```
 
 First, make the account you work in a standard user. While it is an admin, its password is worth root, and an agent that runs as you can capture it with a fake prompt, or wait at a `sudo` prompt for a Touch ID or security key touch you meant for something else. Root can read the token. Keep a separate admin account, type its password only at the login window, and check that `id -Gn` no longer lists `admin` for your account. Also remove any `sudo` PAM module or `PATH` entry that your account can write, such as files under `/opt/homebrew`.
@@ -313,9 +313,9 @@ Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own
 ```sh
 sudo install -d -o root -g wheel -m 0755 /etc/bas
 sudo install -o root -g wheel -m 0644 contrib/macos/broker.toml.example /etc/bas/broker.toml
-sudo install -o root -g wheel -m 0644 contrib/macos/com.snestra.bas.*.plist /Library/LaunchDaemons/
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.snestra.bas.rundir.plist
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.snestra.bas.broker.plist
+sudo install -o root -g wheel -m 0644 contrib/macos/io.github.bjoernaagaard.bas.*.plist /Library/LaunchDaemons/
+sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.bjoernaagaard.bas.rundir.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
 curl -s --unix-socket /var/run/bas/broker.sock http://localhost/v1/status
 ```
 
@@ -328,7 +328,7 @@ sudo cat /var/db/bas/enroll-url
 
 Enroll the first passkey from that link as in step 7. Install the `ssh-keygen` shim and `10-bas.conf` from `contrib/macos/` as in steps 9 to 11. There is no `gh` shim on macOS: Go programs there check certificates with the system verifier and ignore `SSL_CERT_FILE`, so they can't use the proxy.
 
-To remove the broker, run `sudo launchctl bootout system/com.snestra.bas.broker` and `sudo launchctl bootout system/com.snestra.bas.rundir`, then delete the files above.
+To remove the broker, run `sudo launchctl bootout system/io.github.bjoernaagaard.bas.broker` and `sudo launchctl bootout system/io.github.bjoernaagaard.bas.rundir`, then delete the files above.
 
 ## Try the broker without installing it
 
