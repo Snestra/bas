@@ -4,7 +4,7 @@ You can install `bas` from a GitHub release or build it from source. Each releas
 
 ## Install from a release
 
-Download the archive for your platform from the [releases page](https://github.com/Snestra/bas/releases), extract it, and put `bas` on your `PATH`. The archive holds `bas` (or `bas.exe` on Windows) and the README.
+Download the archive for your platform from the [releases page](https://github.com/bjoernaagaard/bas/releases), extract it, and put `bas` on your `PATH`. The archive holds `bas` (or `bas.exe` on Windows) and the README.
 
 ```sh
 tar -xzf bas-Linux-X64.tar.gz
@@ -32,7 +32,7 @@ Release v0.4.0 includes the broker commands on Linux, v0.5.0 adds them on macOS,
 You need Rust 1.89 or newer and the native build tools for your platform. On Linux, the build also needs the OpenSSL development files and `pkg-config` (on Debian and Ubuntu, the `libssl-dev` and `pkg-config` packages). The Agent Access crates come from a pinned Git revision, so the first build needs access to the `bitwarden/agent-access` repository on GitHub and to crates.io.
 
 ```sh
-git clone https://github.com/Snestra/bas
+git clone https://github.com/bjoernaagaard/bas
 cd bas
 cargo build --locked --release
 ./target/release/bas --version
