@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb to build, check, and document bas. Amp snapshots the result,
+# so later orbs start with Rust, the mise tools, and a warm target/ directory.
+# Safe to rerun: each step skips or updates what a stale snapshot already has.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step() {
+  local name="$1"
+  shift
+  echo "==> $name"
+  local start=$SECONDS
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+# Tools the checks in docs/src/reference/development.md and the CI workflows use.
+msrv=1.89.0
+cargo_deny_version=0.20.2
+
+install_rust() {
+  if ! command -v rustup >/dev/null 2>&1 && [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+      sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+  fi
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
+  rustup toolchain install "$msrv" --profile minimal --no-self-update
+  rustup default stable
+}
+
+install_mise_tools() {
+  if [[ ! -x "$HOME/.local/bin/mise" ]]; then
+    curl -fsSL https://mise.run | MISE_QUIET=1 sh
+  fi
+  export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
+  mise trust --quiet "$repo_root/mise.toml"
+  mise trust --quiet "$repo_root/docs/mise.toml"
+  # vhs (root mise.toml) records the tapes and needs ttyd; mdBook builds docs/.
+  mise use --global --quiet ttyd@latest "aqua:EmbarkStudios/cargo-deny@$cargo_deny_version"
+  mise install --quiet
+  (cd docs && mise install --quiet)
+  mise reshim
+}
+
+persist_environment() {
+  local marker="# bas: Rust and mise tools"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<'EOF'
+
+# bas: Rust and mise tools
+case ":$PATH:" in
+  *":$HOME/.cargo/bin:"*) ;;
+  *) export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$HOME/.cargo/bin:$PATH" ;;
+esac
+EOF
+  fi
+}
+
+# Compile what agents run most, so the first check in a new orb is incremental.
+warm_builds() {
+  cargo fetch --locked
+  cargo clippy --locked --all-targets --all-features
+  cargo build --locked --release --bin bas --example e2e
+}
+
+step "Rust toolchains" install_rust
+step "mise tools" install_mise_tools
+step "Login shell environment" persist_environment
+step "Warm cargo builds" warm_builds
