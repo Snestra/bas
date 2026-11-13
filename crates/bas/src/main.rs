@@ -581,11 +581,11 @@ fn tui(args: &cli::TuiArgs) -> Result<ExitCode> {
     if args.broker {
         return run_tui(bas_tui::Start::Broker(bas_broker::client::socket_path()));
     }
-    let profiles = Profiles::load()?;
     #[cfg(unix)]
-    if args.profile.is_none() && profiles.iter().next().is_none() && broker_answers() {
+    if args.profile.is_none() && broker_answers() {
         return run_tui(bas_tui::Start::Broker(bas_broker::client::socket_path()));
     }
+    let profiles = Profiles::load()?;
     let name = match args.profile.as_deref() {
         Some(raw) => profile_name(raw)?,
         None => default_tui_profile(&profiles)?,

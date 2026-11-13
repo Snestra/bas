@@ -36,7 +36,7 @@ Commands print references, metadata, and receipts. Only `bas get` prints a secre
 | `bas auth list` | | Lists profiles and paired devices without contacting a server |
 | `bas auth logout <PROFILE>` | | Deletes a profile and its stored token. For a direct profile, it also removes its paired devices and revokes its grants. |
 | `bas doctor` | `--profile <PROFILE>` | Reports readiness offline, or also signs in to the profile |
-| `bas tui` | `--profile <PROFILE>`, `--broker` (Linux and macOS) | Opens the terminal UI for secrets and projects, and signs in first when the profile doesn't exist. With `--broker`, or with no direct profile while the broker answers, it manages the broker's policy instead, with no token |
+| `bas tui` | `--profile <PROFILE>`, `--broker` (Linux and macOS) | Opens the terminal UI for secrets and projects, and signs in first when the profile doesn't exist. Without `--profile`, it manages the broker's policy with no token whenever the broker answers. `--broker` forces that mode |
 
 ## Secrets
 

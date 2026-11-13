@@ -135,7 +135,7 @@ On Linux, `--unit` or `BAS_BROKER_UNIT` reads another unit, such as a test unit 
 
 ## Manage the policy in bas tui
 
-`bas tui --broker` shows the active policy's entries without any value, and starts the same requests as the commands above. When no direct profile exists and the broker answers, `bas tui` opens this mode by itself. `bas tui --profile NAME` always opens a direct profile.
+`bas tui --broker` shows the active policy's entries without any value, and starts the same requests as the commands above. When the broker answers, `bas tui` opens this mode by itself, even when direct profiles exist. `bas tui --profile NAME` always opens a direct profile.
 
 ```text
 bas tui --broker

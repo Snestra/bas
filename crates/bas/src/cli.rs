@@ -114,15 +114,15 @@ pub enum Command {
     Grant(GrantCommand),
     /// Browse and edit secrets and projects in a terminal UI, or manage a bas broker's policy.
     ///
-    /// Without --profile it opens the profile named default, or the only profile. When the
-    /// profile does not exist yet, it asks for a machine token and saves the profile as
-    /// `bas auth login` does.
+    /// Without --profile it opens broker mode when the bas broker at BAS_BROKER_SOCKET, or
+    /// the default socket, answers. Broker mode needs no machine token: it lists policy
+    /// entries without values, and adds, rotates, edits, and enrolls passkeys through phone
+    /// approvals. Broker mode is for Linux and macOS. --broker opens it even when the broker
+    /// does not answer yet.
     ///
-    /// With --broker it manages the policy of the bas broker at BAS_BROKER_SOCKET, or the
-    /// default socket, with no machine token: it lists policy entries without values, and
-    /// adds, rotates, edits, and enrolls passkeys through phone approvals. Without --broker
-    /// or --profile, bas tui opens broker mode when no direct profile exists and the broker
-    /// answers. Broker mode is for Linux and macOS.
+    /// With --profile, or when no broker answers, it opens the profile named default, or the
+    /// only profile. When the profile does not exist yet, it asks for a machine token and
+    /// saves the profile as `bas auth login` does.
     Tui(TuiArgs),
     /// Run the credential broker, normally as the systemd service bas-broker.service on
     /// Linux or the LaunchDaemon io.github.bjoernaagaard.bas.broker on macOS.
