@@ -2,7 +2,7 @@
 
 `bas` lets a coding agent use secrets from Bitwarden Secrets Manager without printing them. The agent works with references of the form `bas://<profile>/<secret-id>`, and `bas` puts the matching values into the environment of the program the agent runs. `bas` uses Bitwarden Secrets Manager only, and it doesn't use Bitwarden Password Manager.
 
-`bas` is for a person who runs coding agents on their own machines and keeps API keys, SSH keys, and service tokens in Secrets Manager. It is at version 0.7.0, and it isn't ready for production use.
+`bas` is for a person who runs coding agents on their own machines and keeps API keys, SSH keys, and service tokens in Secrets Manager. It is at version 0.8.0, and it isn't ready for production use.
 
 ## Two ways to use bas
 

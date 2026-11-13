@@ -1,6 +1,6 @@
 # Security notes
 
-`bas` is at version 0.7.0 and isn't ready for production use. The notes below say what each part protects against and where its limits are.
+`bas` is at version 0.8.0 and isn't ready for production use. The notes below say what each part protects against and where its limits are.
 
 ## Direct access
 
