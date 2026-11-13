@@ -24,7 +24,7 @@ flowchart LR
 
 ## Status
 
-`bas` v0.8.0 includes the broker for Linux and macOS. Neither is ready for production use. Direct access and Agent Access work on Linux, macOS, and Windows. The broker requires Linux with systemd, or macOS with a standard (not admin) daily account, and an HTTPS address for approvals. Tailscale is optional. The source is under the MIT license.
+`bas` v0.8.1 includes the broker for Linux and macOS. Neither is ready for production use. Direct access and Agent Access work on Linux, macOS, and Windows. The broker requires Linux with systemd, or macOS with a standard (not admin) daily account, and an HTTPS address for approvals. Tailscale is optional. The source is under the MIT license.
 
 ## Quick start
 
