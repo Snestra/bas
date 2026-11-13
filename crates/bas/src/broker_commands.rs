@@ -180,6 +180,67 @@ pub fn rotate(name: &str) -> Result<ExitCode> {
 }
 
 /// `bas policy edit`.
+/// `bas policy show`: lists the entries of the active policy, without values.
+pub fn policy_show(json: bool) -> Result<ExitCode> {
+    let policy = crate::runtime()?
+        .block_on(client().policy())
+        .map_err(broker_error)?;
+    let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
+    let rows: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|entry| {
+            let reference = entry
+                .details
+                .iter()
+                .find(|(label, _)| label == "ref")
+                .map_or("", |(_, text)| text.as_str());
+            let (kind, usage) = match entry.kind {
+                EntryKind::Secret => ("secret", format!("bas run --with {} -- CMD", entry.name)),
+                EntryKind::Helper => ("helper", format!("bas get {reference}")),
+                EntryKind::Ssh => ("ssh", "ssh and git through the broker's ssh-agent".to_owned()),
+                EntryKind::Github => ("github", "gh and git for the listed repositories".to_owned()),
+                EntryKind::Tailscale => ("tailscale", "bas run --with tailscale -- CMD".to_owned()),
+            };
+            let details: serde_json::Map<String, serde_json::Value> = entry
+                .details
+                .iter()
+                .map(|(label, text)| (label.clone(), text.clone().into()))
+                .collect();
+            serde_json::json!({ "kind": kind, "name": entry.name, "use": usage, "details": details })
+        })
+        .collect();
+    let mut out = io::stdout().lock();
+    let written = if json {
+        crate::output::write_json(
+            &mut out,
+            &serde_json::json!({ "policy_hash": policy.hash, "entries": rows }),
+        )
+    } else {
+        rows.iter().try_for_each(|row| {
+            let details = entry_details(row);
+            writeln!(
+                out,
+                "{:<9}  {}  use: {}{details}",
+                row["kind"].as_str().unwrap_or_default(),
+                row["name"].as_str().unwrap_or_default(),
+                row["use"].as_str().unwrap_or_default(),
+            )
+        })
+    };
+    written.map_err(|_| Error::new("could not write to stdout"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `  label=text` for each detail of a `bas policy show` row.
+fn entry_details(row: &serde_json::Value) -> String {
+    row["details"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(label, text)| format!("  {label}={}", text.as_str().unwrap_or_default()))
+        .collect()
+}
+
 pub fn policy_edit() -> Result<ExitCode> {
     let client = client();
     let path = proposal::path().map_err(broker_error)?;

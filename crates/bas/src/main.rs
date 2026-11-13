@@ -176,6 +176,8 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         #[cfg(unix)]
         Command::Policy(cli::PolicyCommand::Edit) => broker_commands::policy_edit(),
         #[cfg(unix)]
+        Command::Policy(cli::PolicyCommand::Show(args)) => broker_commands::policy_show(args.json),
+        #[cfg(unix)]
         Command::Audit(args) => broker_commands::audit(args),
         #[cfg(unix)]
         Command::Passkey(cli::PasskeyCommand::Add) => broker_commands::passkey_add(),

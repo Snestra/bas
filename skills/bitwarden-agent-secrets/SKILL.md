@@ -17,6 +17,8 @@ test -S /run/bas/broker.sock && echo "broker host"
 
 On a broker host, follow the rules below:
 
+- Run `bas policy show` first. It lists every credential the broker holds and how to use each one, without values. Don't guess a name.
+
 - Run a program that needs an API key with `bas run --with NAME -- command`. `NAME` is a `[secret.NAME]` entry of the policy, or `github` or `tailscale`. The program gets proxy settings, and the broker's proxy adds the credential to its HTTPS requests.
 - `gh`, `git`, and `ssh` work without any token. Run `gh` inside a checkout whose `origin` is the GitHub repository. git commits are signed through the broker.
 - If `bas run --with` says a name isn't in the policy, ask the person to add it. You may propose a change with `bas policy edit` or `bas add`, and the person approves it with a passkey. Never try to approve a request yourself.
