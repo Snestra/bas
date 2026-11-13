@@ -20,7 +20,7 @@ bas
 ├── broker                       Linux and macOS
 ├── add                          Linux and macOS
 ├── rotate                       Linux and macOS
-├── policy    edit               Linux and macOS
+├── policy    edit, show         Linux and macOS
 ├── audit                        Linux and macOS
 └── passkey   add                Linux and macOS
 ```
@@ -71,6 +71,7 @@ Commands print references, metadata, and receipts. Only `bas get` prints a secre
 | `bas add <NAME>` | `--host <HOST>`, `--allow <METHOD PATH>` (repeat), `--header <HEADER>`, `--value <VALUE>` | Proposes a new proxy secret, whose value you type on the approval page |
 | `bas rotate <NAME>` | | Replaces a stored value from the approval page, or drops minted `github` or `tailscale` tokens |
 | `bas policy edit` | | Opens the policy proposal in an editor, sends it, and waits for the approval |
+| `bas policy show` | `--json` | Lists every entry of the active policy and how to use it, without values |
 | `bas audit` | `--since <SINCE>`, `--name <NAME>`, `--unit <UNIT>` (Linux), `--json` | Prints the broker's audit entries: from the system journal on Linux, from the broker on macOS |
 | `bas passkey add` | | Asks an enrolled passkey to approve enrolling one more |
 

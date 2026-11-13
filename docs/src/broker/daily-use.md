@@ -1,9 +1,11 @@
 # Daily use
 
-On a broker host, you and your agents use five commands. `bas run --with` uses a credential, and `bas add`, `bas rotate`, and `bas policy edit` change what the broker holds, after you approve with a passkey. `bas audit` shows what happened.
+On a broker host, you and your agents use these commands. `bas policy show` lists what the broker holds, `bas run --with` and `bas get` use a credential, and `bas add`, `bas rotate`, and `bas policy edit` change what the broker holds, after you approve with a passkey. `bas audit` shows what happened.
 
 | Command | Needs an approval | What it does |
 |---|---|---|
+| `bas policy show` | No | Lists every entry of the active policy and how to use it, without values |
+| `bas get REF` | No | Prints the value of a `[helper.NAME]` entry, for a credential helper |
 | `bas run --with NAME -- CMD` | No | Runs `CMD` with proxy settings for the policy entry `NAME` |
 | `bas add NAME --host H --allow "METHOD /path"` | Yes | Creates a secret and a `[secret.NAME]` entry, with a value you type on the approval page |
 | `bas rotate NAME` | Yes for a stored value, no for `github` and `tailscale` | Replaces a stored value, or drops minted tokens |

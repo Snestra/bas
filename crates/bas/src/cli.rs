@@ -204,6 +204,20 @@ pub enum PolicyCommand {
     /// then waits. After the phone approves, bas rewrites the proposal from the active
     /// policy.
     Edit,
+    /// List what the active policy lets programs on this machine use, without values.
+    ///
+    /// Prints one line per entry: its kind, its name, how to use it, and its settings.
+    /// Proxy secrets work with `bas run --with NAME`, helper entries with `bas get REF`, ssh
+    /// keys through the broker's ssh-agent, and github and tailscale through the proxy.
+    Show(PolicyShowArgs),
+}
+
+#[cfg(unix)]
+#[derive(Debug, Args)]
+pub struct PolicyShowArgs {
+    /// Print {"policy_hash","entries":[{"kind","name","use","details"}]} instead of text.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[cfg(unix)]
