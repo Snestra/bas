@@ -215,7 +215,7 @@ pub enum PolicyCommand {
 #[cfg(unix)]
 #[derive(Debug, Args)]
 pub struct PolicyShowArgs {
-    /// Print {"policy_hash","entries":[{"kind","name","use","details"}]} instead of text.
+    /// Print {"policy_hash","entries":[{"kind","name","use","details":[{"label","value"}]}]} instead of text.
     #[arg(long)]
     pub json: bool,
 }

@@ -201,10 +201,11 @@ pub fn policy_show(json: bool) -> Result<ExitCode> {
                 EntryKind::Github => ("github", "gh and git for the listed repositories".to_owned()),
                 EntryKind::Tailscale => ("tailscale", "bas run --with tailscale -- CMD".to_owned()),
             };
-            let details: serde_json::Map<String, serde_json::Value> = entry
+            // A list, not an object: a label such as `repo` repeats once per repository.
+            let details: Vec<serde_json::Value> = entry
                 .details
                 .iter()
-                .map(|(label, text)| (label.clone(), text.clone().into()))
+                .map(|(label, text)| serde_json::json!({ "label": label, "value": text }))
                 .collect();
             serde_json::json!({ "kind": kind, "name": entry.name, "use": usage, "details": details })
         })
@@ -234,10 +235,16 @@ pub fn policy_show(json: bool) -> Result<ExitCode> {
 /// `  label=text` for each detail of a `bas policy show` row.
 fn entry_details(row: &serde_json::Value) -> String {
     row["details"]
-        .as_object()
+        .as_array()
         .into_iter()
         .flatten()
-        .map(|(label, text)| format!("  {label}={}", text.as_str().unwrap_or_default()))
+        .map(|detail| {
+            format!(
+                "  {}={}",
+                detail["label"].as_str().unwrap_or_default(),
+                detail["value"].as_str().unwrap_or_default()
+            )
+        })
         .collect()
 }
 
