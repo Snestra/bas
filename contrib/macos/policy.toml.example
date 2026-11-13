@@ -1,4 +1,4 @@
-# bas broker policy. Copy it to ~/.config/bas/policy.toml and run `bas policy edit`.
+# bas broker policy. Copy it to ~/Library/Application Support/bas/policy.toml and run `bas policy edit`.
 # The broker uses only its own copy in /var/db/bas, which changes after a passkey
 # approves the diff. Every ref must use the profile named in /etc/bas/broker.toml.
 version = 1

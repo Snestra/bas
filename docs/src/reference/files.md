@@ -5,7 +5,7 @@
 ## Files of your user
 
 ```text
-~/.config/bas/              BAS_CONFIG_DIR, mode 0700, outside every Git repository
+~/.config/bas/              BAS_CONFIG_DIR (macOS: ~/Library/Application Support/bas), mode 0700, outside every Git repository
 ├── config.toml             profiles and paired device fingerprints
 ├── grants.toml             grants for paired devices
 ├── helpers.toml            references that bas get may print

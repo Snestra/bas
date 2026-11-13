@@ -139,7 +139,7 @@ pub enum Command {
     ///
     /// The broker opens an approval and bas prints its URL, then waits. After the phone
     /// approves, the broker creates the secret in Bitwarden, adds [secret.NAME] to the
-    /// active policy, and bas rewrites ~/.config/bas/policy.toml from the active policy.
+    /// active policy, and bas rewrites your policy proposal from the active policy.
     /// The value never passes through this terminal.
     #[cfg(unix)]
     Add(AddArgs),
@@ -198,8 +198,8 @@ pub struct RotateArgs {
 pub enum PolicyCommand {
     /// Open the proposal in $VISUAL or $EDITOR, send it, and wait for the phone.
     ///
-    /// The proposal is policy.toml in the bas configuration directory (BAS_CONFIG_DIR, or
-    /// ~/.config/bas). When it does not exist, bas starts it from the active policy. After
+    /// The proposal is policy.toml in the bas configuration directory: BAS_CONFIG_DIR, or
+    /// ~/.config/bas on Linux and ~/Library/Application Support/bas on macOS. When it does not exist, bas starts it from the active policy. After
     /// you save and quit, bas shows the diff from the active policy and the approval URL,
     /// then waits. After the phone approves, bas rewrites the proposal from the active
     /// policy.

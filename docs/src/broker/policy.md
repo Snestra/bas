@@ -1,6 +1,6 @@
 # Policy reference
 
-The policy is a TOML file that says which credentials the broker may use, and how. The broker uses only the active policy, `/var/lib/bas/policy.toml`, which the `bas` user owns and which changes only after a passkey approves the diff. Your copy, `~/.config/bas/policy.toml`, is a proposal that `bas policy edit` sends for approval.
+The policy is a TOML file that says which credentials the broker may use, and how. The broker uses only the active policy, `/var/lib/bas/policy.toml`, which the `bas` user owns and which changes only after a passkey approves the diff. Your copy, `policy.toml` in your configuration directory (`~/.config/bas` on Linux, `~/Library/Application Support/bas` on macOS), is a proposal that `bas policy edit` sends for approval.
 
 ```text
 policy.toml

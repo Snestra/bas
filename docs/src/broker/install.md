@@ -275,22 +275,31 @@ contrib/macos/                                  installed as
 ├── io.github.bjoernaagaard.bas.rundir.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.rundir.plist
 ├── io.github.bjoernaagaard.bas.broker.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
 ├── broker.toml.example                         /etc/bas/broker.toml
-├── policy.toml.example                         ~/.config/bas/policy.toml (your proposal)
+├── policy.toml.example                         ~/Library/Application Support/bas/policy.toml (your proposal)
 ├── shims/ssh-keygen                            /usr/local/lib/bas/shims/ssh-keygen
 └── ssh_config.d/10-bas.conf                    /etc/ssh/ssh_config.d/10-bas.conf
 ```
 
 First, make the account you work in a standard user. While it is an admin, its password is worth root, and an agent that runs as you can capture it with a fake prompt, or wait at a `sudo` prompt for a Touch ID or security key touch you meant for something else. Root can read the token. Keep a separate admin account, type its password only at the login window, and check that `id -Gn` no longer lists `admin` for your account. Also remove any `sudo` PAM module or `PATH` entry that your account can write, such as files under `/opt/homebrew`.
 
-Then install the program and create `_bas`. The 450 to 499 range is for role accounts.
+Then install the program and create `_bas`. The 450 to 499 range is for role accounts. Don't use `sysadminctl -addUser -roleAccount`, which on macOS 27 ignores `-UID` and gives `_bas` the next regular UID, such as 502. Create the account with `dscl` instead. The first command must print nothing, which means no account or group holds ID 450 yet.
 
 ```sh
+dscl . -list /Users UniqueID | awk '$2 == 450'; dscl . -list /Groups PrimaryGroupID | awk '$2 == 450'
 sudo install -o root -g wheel -m 0755 bas /usr/local/bin/bas
 sudo dseditgroup -o create -i 450 -r "bas broker" _bas
-sudo sysadminctl -addUser _bas -roleAccount -UID 450 -GID 450 \
-  -shell /usr/bin/false -home /var/empty -fullName "bas broker"
+sudo dscl . -create /Users/_bas
+sudo dscl . -create /Users/_bas UniqueID 450
+sudo dscl . -create /Users/_bas PrimaryGroupID 450
+sudo dscl . -create /Users/_bas UserShell /usr/bin/false
+sudo dscl . -create /Users/_bas NFSHomeDirectory /var/empty
+sudo dscl . -create /Users/_bas RealName "bas broker"
+sudo dscl . -create /Users/_bas Password '*'
+sudo dscl . -create /Users/_bas IsHidden 1
 id _bas
 ```
+
+`id _bas` must start with `uid=450(_bas) gid=450(_bas)`.
 
 Create the state, token, and log files. `read -s` hides what you paste. Don't put the token in a file of your own or on a command line.
 

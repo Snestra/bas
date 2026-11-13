@@ -67,7 +67,7 @@ sequenceDiagram
     B->>SM: create the secret in the project from broker.toml
     B->>B: add [secret.OPENAI_API_KEY] to the active policy
     B-->>bas: approved, with the new reference
-    bas->>bas: rewrite ~/.config/bas/policy.toml from the active policy
+    bas->>bas: rewrite your proposal from the active policy
     bas-->>You: added OPENAI_API_KEY as bas://home/<secret-id>
 ```
 
@@ -89,11 +89,11 @@ To replace an SSH key, change the secret in Secrets Manager, then restart the br
 
 ## Change the policy
 
-`bas policy edit` opens your proposal, `~/.config/bas/policy.toml`, in `$VISUAL` or `$EDITOR`. After you save and quit, it sends the proposal, prints the diff and the approval URL, and waits. After the approval, it rewrites your proposal from the active policy.
+`bas policy edit` opens your proposal, `policy.toml` in your configuration directory (`~/.config/bas` on Linux, `~/Library/Application Support/bas` on macOS), in `$VISUAL` or `$EDITOR`. After you save and quit, it sends the proposal, prints the diff and the approval URL, and waits. After the approval, it rewrites your proposal from the active policy.
 
 ```text
 bas policy edit
-├── no proposal yet: copy the active policy to ~/.config/bas/policy.toml
+├── no proposal yet: copy the active policy to the proposal
 ├── open the proposal in the editor
 ├── send it to the broker
 │   ├── the same as the active policy: print "nothing to approve" and stop
@@ -102,7 +102,7 @@ bas policy edit
 └── wait for the approval, then rewrite the proposal from the active policy
 ```
 
-If the active policy changes while a proposal waits for approval, for example because of a `bas add`, the approval fails with "the active policy changed after this request", so one change can't silently undo another. Run `bas policy edit` again. If you sync `~/.config/bas/policy.toml` to other machines, each broker asks for its own approval.
+If the active policy changes while a proposal waits for approval, for example because of a `bas add`, the approval fails with "the active policy changed after this request", so one change can't silently undo another. Run `bas policy edit` again. If you sync your proposal to other machines, each broker asks for its own approval.
 
 ## Add a passkey
 
