@@ -7,7 +7,7 @@
 //! No line records a value.
 
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -129,7 +129,7 @@ fn with_parent(line: serde_json::Value) -> serde_json::Value {
 /// Path of the parent's executable, read from /proc.
 #[cfg(target_os = "linux")]
 fn parent_program(pid: u32) -> Option<String> {
-    fs::read_link(format!("/proc/{pid}/exe"))
+    std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|path| path.display().to_string())
 }
