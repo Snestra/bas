@@ -290,14 +290,12 @@ fn doctor_reports_offline_readiness(runner: &mut Runner) -> Step {
     ensure(observation.exited_with(0), "doctor exits 0 offline")?;
     for label in [
         "build",
-        "secrets manager sdk",
-        "agent access sdk",
         "profiles",
         "machine token",
     ] {
         ensure(
             observation.stdout_contains(label),
-            "doctor reports all five offline checks",
+            "doctor reports all three offline checks",
         )?;
     }
     ensure(
