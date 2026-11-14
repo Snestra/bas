@@ -1054,7 +1054,7 @@ async fn run_pair(name: ProfileName, relay: RelayUrl) -> Result<ExitCode, Error>
          references resolve through that listener, and delivery needs approval or an exact grant there",
         listener.to_hex()
     )
-    .map_err(|_| Error::new("could not write to standard output"))?;
+    .map_err(crate::stdout_failed)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1098,7 +1098,7 @@ pub async fn fetch(remote: &RemoteProfile, ids: &[Uuid]) -> Result<Vec<(Uuid, Se
     let name = &remote.name;
     let not_paired = || {
         Error::new(format!(
-            "not started: remote profile '{name}' has no stored pairing; run `bas auth logout \
+            "remote profile '{name}' has no stored pairing; run `bas auth logout \
              {name}` and `bas pair {name}` again"
         ))
     };
@@ -1124,7 +1124,7 @@ pub async fn fetch(remote: &RemoteProfile, ids: &[Uuid]) -> Result<Vec<(Uuid, Se
         Box::new(DefaultRelayClient::from_url(relay.to_string())),
     )
     .await
-    .map_err(|_| Error::new(format!("not started: could not connect to relay {relay}")))?;
+    .map_err(|_| Error::new(format!("could not connect to relay {relay}")))?;
     client
         .load_cached_connection(remote.listener)
         .await
@@ -1166,7 +1166,7 @@ fn accept(reference: &SecretRef, credential: CredentialData) -> Result<SecretTex
     match password {
         Some(password) if matches && !extra => Ok(SecretText::from_zeroizing(password)),
         _ => Err(Error::new(format!(
-            "not started: the listener's response for {reference} was malformed"
+            "the listener's response for {reference} was malformed"
         ))),
     }
 }
@@ -1174,18 +1174,18 @@ fn accept(reference: &SecretRef, credential: CredentialData) -> Result<SecretTex
 fn request_error(reference: &SecretRef, relay: &RelayUrl, err: &ClientError) -> Error {
     Error::new(match err {
         ClientError::CredentialRequestFailed(_) => {
-            format!("not started: the listener denied {reference}")
+            format!("the listener denied {reference}")
         }
         ClientError::Timeout(_) => {
-            format!("not started: the listener did not answer for {reference} in time")
+            format!("the listener did not answer for {reference} in time")
         }
         ClientError::ChannelClosed
         | ClientError::ConnectionFailed(_)
         | ClientError::WebSocket(_)
         | ClientError::RelayAuthFailed(_) => {
-            format!("not started: lost the connection to relay {relay}")
+            format!("lost the connection to relay {relay}")
         }
-        _ => format!("not started: the Agent Access request for {reference} failed"),
+        _ => format!("the Agent Access request for {reference} failed"),
     })
 }
 

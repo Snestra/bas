@@ -132,12 +132,6 @@ pub fn update(
             .get(reference.id)
             .await
             .map_err(|failure| failure.read_error(profile, "read the secret to update"))?;
-        if current.organization_id() != profile.organization {
-            return Err(Error::new(format!(
-                "{reference} is outside the organization of profile '{}'",
-                profile.name
-            )));
-        }
         if current.key().trim() != current.key()
             || current.note().expose().trim() != current.note().expose()
         {
@@ -225,14 +219,11 @@ fn matches_write(stored: &Secret, write: &WriteRequest<'_>, profile: &Profile) -
         && stored.note().expose() == write.note.expose()
 }
 
+/// Describes a write the service or the SDK refused. Only [`Failure::is_rejection`] failures
+/// reach here, so a failure without an HTTP status is the SDK's own validation.
 fn refused(failure: Failure, profile: &Profile, operation: &str) -> Error {
-    let name = &profile.name;
     let reason = match failure {
-        Failure::Status(401 | 403) => format!("profile '{name}' is not authorized to {operation}"),
-        Failure::Status(404) => format!("could not {operation}: not found or not accessible"),
-        Failure::Status(status) => {
-            format!("Secrets Manager refused to {operation} (HTTP {status})")
-        }
+        Failure::Status(_) => failure.read_error(profile, operation).to_string(),
         _ => format!("the SDK refused to {operation} before sending it"),
     };
     Error::new(format!("not written: {reason}"))

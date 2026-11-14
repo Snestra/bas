@@ -66,12 +66,8 @@ impl Terminal {
     ///
     /// Comparison ignores surrounding whitespace and ASCII case.
     pub async fn confirm(&mut self, prompt: &str, expected: &str, deadline: Instant) -> Decision {
-        loop {
-            match self.lines.try_recv() {
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Decision::Unavailable,
-            }
+        if !self.discard_typed() {
+            return Decision::Unavailable;
         }
         if write!(self.output, "{prompt} ")
             .and_then(|()| self.output.flush())
@@ -93,17 +89,24 @@ impl Terminal {
 
     /// Reads one line typed after the prompt, or `None` without an answer in time.
     pub async fn ask(&mut self, prompt: &str, deadline: Instant) -> Option<String> {
-        loop {
-            match self.lines.try_recv() {
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return None,
-            }
+        if !self.discard_typed() {
+            return None;
         }
         write!(self.output, "{prompt} ")
             .and_then(|()| self.output.flush())
             .ok()?;
         timeout_at(deadline, self.lines.recv()).await.ok().flatten()
+    }
+
+    /// Drops lines typed before a prompt. Returns `false` when the terminal is gone.
+    fn discard_typed(&mut self) -> bool {
+        loop {
+            match self.lines.try_recv() {
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => return true,
+                Err(TryRecvError::Disconnected) => return false,
+            }
+        }
     }
 }
 
