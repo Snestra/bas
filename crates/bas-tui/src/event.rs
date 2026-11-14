@@ -2,6 +2,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use bas_core::Uuid;
+use bas_core::credential::MachineToken;
 use bas_core::secrets::{Identifier, Project, Secret, Session};
 use color_eyre::eyre::OptionExt;
 use crossterm::event::Event as CrosstermEvent;
@@ -31,6 +32,8 @@ pub enum Event {
 pub enum AppEvent {
     /// Login finished. Boxed because a signed-in session is much larger than the other events.
     Connected(Box<color_eyre::Result<Session>>),
+    /// The sign-in screen's token signed in, and its profile still has to be saved.
+    SignedIn(Box<(Session, MachineToken)>),
     /// A project listing arrived. When it follows a write, `select` names the project to
     /// highlight and `done` is the status line text.
     Projects {
