@@ -9,10 +9,10 @@ Use `bas` for Bitwarden Secrets Manager. Don't use Bitwarden Password Manager, a
 
 ## Check for a broker first
 
-On a Linux host with the `bas` broker, use the credentials in its policy without asking for their raw values. Check for the broker with the command below.
+On a host with the `bas` broker, use the credentials in its policy without asking for their raw values. Check for the broker with the command below.
 
 ```sh
-test -S /run/bas/broker.sock && echo "broker host"
+test -S /run/bas/broker.sock || test -S /var/run/bas/broker.sock && echo "broker host"
 ```
 
 On a broker host, follow the rules below:

@@ -7,9 +7,9 @@
 | Variable | Read by | Meaning |
 |---|---|---|
 | `BAS_CONFIG_DIR` | every command | Absolute path of the configuration directory, outside every Git repository |
-| `BAS_STATE_DIR` | `bas run`, `bas env run` | Absolute path of the directory for `audit.log` |
+| `BAS_STATE_DIR` | `bas run`, `bas env run`, `bas get` | Absolute path of the directory for `audit.log` |
 | `BWS_ACCESS_TOKEN` | profiles made with `--from-env` | The machine token, read at each use |
-| `BAS_BROKER_SOCKET` | `bas run --with`, `add`, `rotate`, `policy`, `passkey` | Path of the broker socket, instead of `/run/bas/broker.sock` |
+| `BAS_BROKER_SOCKET` | `bas run --with`, `add`, `rotate`, `policy`, `passkey`, `tui`, `get`, `audit` | Path of the broker socket, instead of `/run/bas/broker.sock` on Linux or `/var/run/bas/broker.sock` on macOS |
 | `BAS_BROKER_UNIT` | `bas audit` | Broker unit to read, instead of `bas-broker.service` |
 | `VISUAL`, `EDITOR` | `bas policy edit` | Editor for the proposal, `vi` when neither is set |
 | `CREDENTIALS_DIRECTORY` | `bas broker` | Set by systemd. The broker reads the machine token from the file `bws` in the directory. |

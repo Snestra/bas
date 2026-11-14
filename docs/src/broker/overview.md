@@ -33,13 +33,13 @@ flowchart LR
         PAGES[approval pages on 127.0.0.1:793]
         TOKEN[(sealed machine token)]
     end
-    PHONE[Passkey or YubiKey in your browser]
+    BROWSER[Passkey or YubiKey in your browser]
     RUN --> API
     CLI --> API
     RUN -.program traffic.-> PROXY
     GH --> PROXY
     GIT --> AGENT
-    PHONE -->|https://bas.TAILNET.ts.net| PAGES
+    BROWSER -->|https://bas.TAILNET.ts.net| PAGES
     PROXY --> HOSTS[API hosts, github.com, api.tailscale.com]
     TOKEN --> SM[(Bitwarden Secrets Manager)]
     API --> JOURNAL[(system journal)]
@@ -76,7 +76,7 @@ sequenceDiagram
 
 ## How you approve changes
 
-A change to what the broker allows needs your approval with a passkey. A passkey is a WebAuthn key pair kept on a device, such as a YubiKey or your phone, and each approval needs user verification on the device, such as a touch, a PIN, or Face ID. An agent on the broker machine can't give the verification.
+A change to what the broker allows needs your approval with a passkey. A passkey is a WebAuthn key pair kept on a device, such as a YubiKey or a password manager, and each approval needs user verification on the device, such as a touch, a PIN, or Face ID. An agent on the broker machine can't give the verification.
 
 The broker serves the approval pages on `127.0.0.1:793`. An HTTPS reverse proxy publishes them at the configured approval address, and Tailscale Serve is an optional way to do that. Port 793 is below 1024, so no process of your user can take it, even while the broker is down. Each page shows what was asked, the user ID and process ID the kernel reported, and for a policy change the diff.
 

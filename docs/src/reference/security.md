@@ -22,7 +22,7 @@ The broker keeps values away from your user only if your user has no way to root
 | Decrypt the sealed token | The credential is sealed for the system and readable by root only | None without root |
 | Read the broker's memory or environment | A separate user, `ProtectProc=invisible`, `LimitCORE=0`, no swap | None without root |
 | Widen access by editing `policy.toml` | The broker uses only the approved copy and shows the diff on the approval page | You approve a diff without reading it |
-| Approve its own request | WebAuthn with user verification on your device | A compromised phone, or a passkey synced to a machine where an agent runs |
+| Approve its own request | WebAuthn with user verification on your device | A compromised passkey device, or a passkey synced to a machine where an agent runs |
 | Show you a false approval page | The configured approval hostname, port 793 below 1024, and an HTTPS reverse proxy controlled only by administrators | A secret typed into a page on another origin |
 | Read a token from `gh` or git | The proxy adds the token, and the program never receives it | None found |
 | Send a credential to another host | Injection for exact policy hosts only, upstream TLS verified, inner `Host` equal to the `CONNECT` host, port 443 only | A policy host whose response repeats the request headers |

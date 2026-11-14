@@ -19,9 +19,9 @@ contrib/linux/                      installed as
 You need the following:
 
 - A Linux machine with systemd and `systemd-creds`, and an HTTPS reverse proxy for approvals. Tailscale Serve is one option.
-- `bas` v0.4.0 or later on Linux, v0.5.0 or later on macOS, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
+- `bas` v0.4.0 or later on Linux, v0.8.1 or later on macOS, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
 - A Secrets Manager machine account for the broker and an access token for it. Give the account read access to the project that holds the secrets the policy names, and write access to the project where `bas add` should create new secrets.
-- A passkey device, such as a YubiKey or a phone.
+- A passkey device, such as a YubiKey, or a phone or password manager that holds passkeys.
 
 ```mermaid
 flowchart TD
@@ -177,7 +177,7 @@ $ bas policy edit
 +[secret.JINA_API_KEY]
 +ref = "bas://home/<secret-id>"
 ...
-Approve on your phone: https://bas.TAILNET.ts.net/a/<approval-id>
+Approve with your passkey: https://bas.TAILNET.ts.net/a/<approval-id>
 Waiting for approval <approval-id> (it expires in 15 minutes)...
 the active policy is now <hash>
 ```
@@ -317,7 +317,7 @@ sudo chown _bas:_bas /var/log/bas/broker.log && sudo chmod 0640 /var/log/bas/bro
 
 The append-only flag lets the broker add lines and stops anyone but root from changing old ones. Only the broker reads the file, and `bas audit` asks the broker for it.
 
-Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a phone never approves a request on the wrong broker. Then load both daemons.
+Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a passkey never approves a request on the wrong broker. Then load both daemons.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /etc/bas

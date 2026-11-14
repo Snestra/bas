@@ -49,7 +49,7 @@ Use `eu` for an account in the EU region. The report keeps the reference to the 
 
 ## CI and releases
 
-The `ci` workflow in `.github/workflows/ci.yml` runs on pull requests and on demand. It builds and checks `bas` on Linux, macOS, and Windows runners, and it checks Rust 1.89 on Linux. The `release` workflow runs the same checks on every `v*` tag and publishes the archives as a GitHub release. The `docs` workflow builds the site with mdBook and publishes it to GitHub Pages. No workflow receives live vault credentials.
+The `ci` workflow in `.github/workflows/ci.yml` runs on pull requests, on pushes to `main`, on demand, and when the `release` workflow calls it. Pull requests build and check `bas` on Linux only. The other runs build it on Linux, macOS, and Windows runners. Every run checks Rust 1.89 on Linux. The `release` workflow runs the same checks on every `v*` tag and publishes the archives as a GitHub release. The `docs` workflow builds the site with mdBook and publishes it to GitHub Pages. No workflow receives live vault credentials.
 
 ```sh
 cd docs
