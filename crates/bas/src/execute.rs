@@ -199,25 +199,34 @@ fn env_value(name: &EnvName, value: SecretText) -> Result<SecretText, Error> {
 /// Retrieves each referenced secret once and returns values in binding order.
 fn resolve(bindings: &[Binding]) -> Result<Vec<SecretText>, Error> {
     let references: Vec<&SecretRef> = bindings.iter().map(|binding| &binding.reference).collect();
-    let retrieved = retrieve(&references).map_err(Error::not_started)?;
-    let missing: Vec<String> = bindings
-        .iter()
-        .filter(|binding| !retrieved.contains_key(&binding.reference))
-        .map(|binding| binding.reference.to_string())
-        .collect();
-    if !missing.is_empty() {
-        return Err(Error::new(format!(
+    let mut retrieved = retrieve(&references).map_err(Error::not_started)?;
+    let mut missing = Vec::new();
+    let mut values = Vec::with_capacity(bindings.len());
+    for (index, binding) in bindings.iter().enumerate() {
+        let needed_later = bindings[index + 1..]
+            .iter()
+            .any(|later| later.reference == binding.reference);
+        let value = if needed_later {
+            retrieved
+                .get(&binding.reference)
+                .map(|value| SecretText::new(value.expose().to_owned()))
+        } else {
+            retrieved.remove(&binding.reference)
+        };
+        if let Some(value) = value {
+            values.push(env_value(&binding.name, value)?);
+        } else {
+            missing.push(binding.reference.to_string());
+        }
+    }
+    if missing.is_empty() {
+        Ok(values)
+    } else {
+        Err(Error::new(format!(
             "not started: no accessible secret for {}",
             missing.join(", ")
-        )));
+        )))
     }
-    bindings
-        .iter()
-        .map(|binding| {
-            let value = &retrieved[&binding.reference];
-            env_value(&binding.name, SecretText::new(value.expose().to_owned()))
-        })
-        .collect()
 }
 
 /// Retrieves one secret for `bas get`, through the same profiles, listener approvals, and
@@ -337,8 +346,11 @@ fn finish(status: ExitStatus, copiers: Vec<thread::JoinHandle<()>>) -> ! {
     std::process::exit(status.code().unwrap_or(1))
 }
 
-/// Runs the program with masked output and forwards SIGINT, SIGTERM, SIGHUP, and SIGQUIT to
-/// it, so `bas` exits only after the program does.
+/// Runs the program with masked output, so `bas` exits only after the program does.
+///
+/// The program shares the process group of `bas`, so the terminal already sends it
+/// SIGINT, SIGHUP, and SIGQUIT. `bas` catches those only to stay alive, and forwards just
+/// SIGTERM, which is sent to `bas` alone.
 #[cfg(unix)]
 fn launch(mut command: Command, program: &OsStr, masker: Masker) -> Error {
     use rustix::process::{Pid, Signal, kill_process};
@@ -355,7 +367,7 @@ fn launch(mut command: Command, program: &OsStr, masker: Masker) -> Error {
         signal(SignalKind::hangup()),
         signal(SignalKind::quit()),
     );
-    let (Ok(mut int), Ok(mut term), Ok(mut hup), Ok(mut quit)) = streams else {
+    let (Ok(_int), Ok(mut term), Ok(_hup), Ok(_quit)) = streams else {
         return Error::new("not started: could not install signal handlers");
     };
     let (mut child, copiers) = match spawn_masked(&mut command, program, masker) {
@@ -366,14 +378,12 @@ fn launch(mut command: Command, program: &OsStr, masker: Masker) -> Error {
     let status = runtime.block_on(async move {
         let mut waiter = tokio::task::spawn_blocking(move || child.wait());
         loop {
-            let forward = tokio::select! {
+            tokio::select! {
                 status = &mut waiter => return status,
-                _ = int.recv() => Signal::INT,
-                _ = term.recv() => Signal::TERM,
-                _ = hup.recv() => Signal::HUP,
-                _ = quit.recv() => Signal::QUIT,
-            };
-            let _ = kill_process(pid, forward);
+                _ = term.recv() => {
+                    let _ = kill_process(pid, Signal::TERM);
+                }
+            }
         }
     });
     match status {
