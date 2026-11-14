@@ -31,14 +31,15 @@ pub enum Command {
     ///
     /// Every reference is resolved before the program starts; if any is missing or denied,
     /// the program does not start. References to a remote profile are requested one by one
-    /// from its paired listener, and each needs approval or an exact grant there; a remote failure never falls
-    /// back to a machine token. Arguments after -- reach the program unchanged, without a
-    /// shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its environment. Each injected
-    /// value of 4 or more bytes is replaced with [bas:NAME] in the program's stdout and
-    /// stderr. Masking isn't a sandbox, because the program can still write a value to a
-    /// file or send it elsewhere. Before the program starts, bas appends one JSON line per
-    /// binding to audit.log in BAS_STATE_DIR or the user state directory, and the line never
-    /// holds a value. If the audit line can't be written, the program doesn't start.
+    /// from its paired listener, and each needs approval or an exact grant there; a remote
+    /// failure never falls back to a machine token. Arguments after -- reach the program
+    /// unchanged, without a shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its
+    /// environment. Each injected value of 4 or more bytes is replaced with [bas:NAME] in the
+    /// program's stdout and stderr. Masking isn't a sandbox, because the program can still
+    /// write a value to a file or send it elsewhere. Before the program starts, bas appends
+    /// one JSON line per binding to audit.log in BAS_STATE_DIR or the user state directory,
+    /// and the line never holds a value. If the audit line can't be written, the program
+    /// doesn't start.
     ///
     /// With --with NAME (Linux and macOS), the program never receives the value of the policy
     /// entry NAME. The bas broker confirms that NAME is a proxy entry, and bas sets
@@ -116,7 +117,7 @@ pub enum Command {
     ///
     /// Without --profile it opens broker mode when the bas broker at BAS_BROKER_SOCKET, or
     /// the default socket, answers. Broker mode needs no machine token: it lists policy
-    /// entries without values, and adds, rotates, edits, and enrolls passkeys through phone
+    /// entries without values, and adds, rotates, edits, and enrolls passkeys through passkey
     /// approvals. Broker mode is for Linux and macOS. --broker opens it even when the broker
     /// does not answer yet.
     ///
@@ -130,27 +131,27 @@ pub enum Command {
     /// The broker reads the machine token from the file bws in $CREDENTIALS_DIRECTORY,
     /// serves an HTTP and JSON API on a unix socket to the uids in broker.toml, runs an
     /// HTTPS proxy that adds policy credentials to requests for policy hosts, an ssh-agent
-    /// that signs with policy keys, and approval pages where a passkey on your phone
-    /// approves changes. It records one audit entry with BAS_AUDIT=1 per credential use,
+    /// that signs with policy keys, and approval pages where a passkey approves
+    /// changes. It records one audit entry with BAS_AUDIT=1 per credential use,
     /// change, or refusal: in the journal on Linux, in an append-only file on macOS.
     #[cfg(unix)]
     Broker(BrokerArgs),
-    /// Propose a new proxy secret. You type its value on the approval page on your phone.
+    /// Propose a new proxy secret. You type its value on the approval page.
     ///
-    /// The broker opens an approval and bas prints its URL, then waits. After the phone
+    /// The broker opens an approval and bas prints its URL, then waits. After a passkey
     /// approves, the broker creates the secret in Bitwarden, adds [secret.NAME] to the
     /// active policy, and bas rewrites your policy proposal from the active policy.
     /// The value never passes through this terminal.
     #[cfg(unix)]
     Add(AddArgs),
-    /// Rotate a secret: drop minted tokens at once, or replace a stored value from the phone.
+    /// Rotate a secret: drop minted tokens at once, or replace a stored value.
     ///
     /// NAME is a [secret.NAME] entry, whose new value you type on the approval page, or
     /// github or tailscale, whose cached tokens the broker drops so the next request mints
     /// new ones.
     #[cfg(unix)]
     Rotate(RotateArgs),
-    /// Edit the policy proposal and ask your phone to approve it.
+    /// Edit the policy proposal and ask a passkey to approve it.
     #[cfg(unix)]
     #[command(subcommand)]
     Policy(PolicyCommand),
@@ -196,13 +197,13 @@ pub struct RotateArgs {
 #[cfg(unix)]
 #[derive(Debug, Subcommand)]
 pub enum PolicyCommand {
-    /// Open the proposal in $VISUAL or $EDITOR, send it, and wait for the phone.
+    /// Open the proposal in $VISUAL or $EDITOR, send it, and wait for approval.
     ///
     /// The proposal is policy.toml in the bas configuration directory: BAS_CONFIG_DIR, or
-    /// ~/.config/bas on Linux and ~/Library/Application Support/bas on macOS. When it does not exist, bas starts it from the active policy. After
-    /// you save and quit, bas shows the diff from the active policy and the approval URL,
-    /// then waits. After the phone approves, bas rewrites the proposal from the active
-    /// policy.
+    /// ~/.config/bas on Linux and ~/Library/Application Support/bas on macOS. When it does
+    /// not exist, bas starts it from the active policy. After you save and quit, bas shows
+    /// the diff from the active policy and the approval URL, then waits. After a passkey
+    /// approves, bas rewrites the proposal from the active policy.
     Edit,
     /// List what the active policy lets programs on this machine use, without values.
     ///
@@ -225,7 +226,7 @@ pub struct PolicyShowArgs {
 pub enum PasskeyCommand {
     /// Ask an enrolled passkey to approve enrolling one more.
     ///
-    /// The approving phone shows a one-time link, valid for 15 minutes. Open it on the
+    /// The approval page shows a one-time link, valid for 15 minutes. Open it on the
     /// device that should hold the new passkey. The link never reaches this terminal.
     Add,
 }

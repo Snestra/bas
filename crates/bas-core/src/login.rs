@@ -85,7 +85,8 @@ impl LoginRequest {
 /// # Errors
 ///
 /// Fails on a conflicting profile, or when the credential store or configuration cannot be
-/// written.
+/// written. When only the old stored token cannot be deleted, the profile is already saved
+/// and the error says so.
 pub fn save(lock: &ConfigLock, profile: &Profile, token: &MachineToken) -> Result<(), Error> {
     let mut profiles = Profiles::load()?;
     let previous = conflict(
@@ -96,11 +97,21 @@ pub fn save(lock: &ConfigLock, profile: &Profile, token: &MachineToken) -> Resul
     )?;
     if profile.credential == CredentialSource::OsStore {
         credential::store_token(&profile.name, token)?;
-    } else if previous.is_some_and(|previous| previous.credential == CredentialSource::OsStore) {
-        credential::delete_token(&profile.name)?;
     }
     profiles.insert(profile.clone());
-    profiles.save(lock)
+    profiles.save(lock)?;
+    if previous.is_some_and(|previous| previous.credential == CredentialSource::OsStore)
+        && profile.credential != CredentialSource::OsStore
+    {
+        credential::delete_token(&profile.name).map_err(|err| {
+            Error::new(format!(
+                "profile '{}' was saved, but its old token is still in the OS credential \
+                 store: {err}",
+                profile.name
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 fn conflict(

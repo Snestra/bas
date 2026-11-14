@@ -51,6 +51,14 @@ impl Error {
         }
     }
 
+    /// The same failure, reported as the reason a program was not started.
+    pub fn not_started(self) -> Self {
+        Self {
+            message: format!("not started: {}", self.message),
+            ..self
+        }
+    }
+
     pub fn exit_code(&self) -> ExitCode {
         ExitCode::from(self.exit)
     }

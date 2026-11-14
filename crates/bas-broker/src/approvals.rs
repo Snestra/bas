@@ -1,10 +1,10 @@
-//! Requests that wait for a passkey approval on the phone.
+//! Requests that wait for a passkey approval.
 //!
 //! Each request keeps the WebAuthn challenges issued for it, at most eight, so an assertion
 //! approves only the request whose challenge it signed. The first assertion that passes
 //! clears them, so none can approve twice. A failed assertion uses nothing up, so a forged
-//! answer cannot cancel the phone's real one. Requests expire after 15 minutes. They live in memory, so a broker restart
-//! drops every pending request.
+//! answer cannot cancel the real one. Requests expire after 15 minutes. They live in
+//! memory, so a broker restart drops every pending request.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
@@ -20,7 +20,7 @@ use crate::passkeys::now_text;
 use crate::policy::SecretFile;
 use crate::protocol::ApprovalState;
 
-/// How long a request waits for the phone.
+/// How long a request waits for an approval.
 const LIFETIME: Duration = Duration::from_secs(15 * 60);
 /// Challenges kept per request.
 const MAX_CHALLENGES: usize = 8;
@@ -30,14 +30,14 @@ const KEEP: Duration = Duration::from_secs(60 * 60);
 /// What a request asks for.
 #[derive(Debug, Clone)]
 pub enum Kind {
-    /// `bas add`: create a secret from a value typed on the phone, and add its entry.
+    /// `bas add`: create a secret from a value typed on the approval page, and add its entry.
     AddSecret {
         /// Policy name and secret key.
         name: String,
         /// The entry without `ref`.
         entry: SecretFile,
     },
-    /// `bas rotate`: replace a stored value with one typed on the phone.
+    /// `bas rotate`: replace a stored value with one typed on the approval page.
     Rotate {
         /// Policy name.
         name: String,
@@ -53,7 +53,7 @@ pub enum Kind {
         /// Unified diff from the active policy.
         diff: String,
     },
-    /// `bas passkey add`: show a new enrollment link on the approving phone.
+    /// `bas passkey add`: show a new enrollment link on the approval page.
     Passkey,
 }
 
@@ -77,7 +77,7 @@ impl Kind {
         }
     }
 
-    /// Whether the phone must type a secret value to approve.
+    /// Whether the approver must type a secret value to approve.
     pub fn needs_value(&self) -> bool {
         matches!(self, Self::AddSecret { .. } | Self::Rotate { .. })
     }
@@ -86,11 +86,11 @@ impl Kind {
 /// Where a request stands.
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Waiting for the phone.
+    /// Waiting for an approval.
     Pending,
     /// Approved and applied, with what the change produced.
     Approved(serde_json::Value),
-    /// Denied on the phone.
+    /// Denied on the approval page.
     Denied,
     /// Nobody answered in time.
     Expired,
@@ -271,7 +271,7 @@ impl Approvals {
         Ok((approval.kind.clone(), approval.challenges.clone()))
     }
 
-    /// Marks a request as approved by the phone and being applied, and clears its
+    /// Marks a request as approved on the approval page and being applied, and clears its
     /// challenges. Fails when it expired, was denied, or another assertion won meanwhile.
     pub fn start_applying(&self, id: Uuid) -> Result<(), Refused> {
         let mut map = self.lock();

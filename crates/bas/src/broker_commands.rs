@@ -3,7 +3,7 @@
 //! its journal. Linux and macOS.
 //!
 //! Only `bas get` handles a secret value, the value of a `[helper.NAME]` entry that a
-//! passkey approved. Other values are typed on the phone's approval page.
+//! passkey approved. Other values are typed on the approval page.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -14,13 +14,15 @@ use std::process::ExitCode;
 use bas_broker::client::{self, Client, Outcome};
 use bas_broker::proposal;
 use bas_broker::protocol::{
-    Accepted, AddSecret, ApprovalState, EntryKind, HelperRequest, PolicyProposal, SecretEntry,
+    Accepted, AddSecret, ApprovalState, EntryKind, EntrySummary, HelperRequest, PolicyProposal,
+    SecretEntry,
 };
 use bas_core::credential::SecretText;
 use bas_core::reference::{EnvName, SecretRef};
+use serde::Serialize;
 
 use crate::cli::{AddArgs, AuditArgs};
-use crate::output::{Error, Result};
+use crate::output::{self, Error, Result};
 
 /// Unit whose journal entries `bas audit` reads by default.
 #[cfg(target_os = "linux")]
@@ -48,11 +50,12 @@ pub fn helper_value(reference: &SecretRef) -> Result<SecretText> {
     };
     let reply = crate::runtime()?
         .block_on(client().helper(&request))
-        .map_err(|err| {
-            Error::new(format!(
+        .map_err(|err| match err.kind() {
+            bas_broker::ErrorKind::Refused => Error::new(format!(
                 "{err}. On a broker host, bas get reads only references in a [helper.NAME] \
                  table of the broker's policy; add one with `bas policy edit`"
-            ))
+            )),
+            _ => broker_error(err),
         })?;
     Ok(SecretText::new(reply.value))
 }
@@ -64,16 +67,19 @@ pub fn helper_references() -> Result<Vec<String>> {
         .map_err(broker_error)?;
     let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
     Ok(entries
-        .into_iter()
+        .iter()
         .filter(|entry| entry.kind == EntryKind::Helper)
-        .filter_map(|entry| {
-            entry
-                .details
-                .into_iter()
-                .find(|(label, _)| label == "ref")
-                .map(|(_, reference)| reference)
-        })
+        .filter_map(|entry| reference(entry).map(str::to_owned))
         .collect())
+}
+
+/// The `ref` setting of a policy entry.
+fn reference(entry: &EntrySummary) -> Option<&str> {
+    entry
+        .details
+        .iter()
+        .find(|(label, _)| label == "ref")
+        .map(|(_, text)| text.as_str())
 }
 
 fn broker_error(err: bas_broker::Error) -> Error {
@@ -81,13 +87,13 @@ fn broker_error(err: bas_broker::Error) -> Error {
 }
 
 fn say(text: &str) -> Result<()> {
-    writeln!(io::stdout().lock(), "{text}").map_err(|_| Error::new("could not write to stdout"))
+    writeln!(io::stdout().lock(), "{text}").map_err(crate::stdout_failed)
 }
 
-/// Prints the approval URL and waits until the phone answers or the request expires.
+/// Prints the approval URL and waits until a passkey answers or the request expires.
 fn wait(client: &Client, accepted: &Accepted) -> Result<ApprovalState> {
     eprintln!(
-        "Approve on your phone: {}\nWaiting for approval {} (it expires in 15 minutes)...",
+        "Approve with your passkey: {}\nWaiting for approval {} (it expires in 15 minutes)...",
         accepted.approval.url, accepted.approval.id
     );
     let runtime = crate::runtime()?;
@@ -100,7 +106,7 @@ fn wait(client: &Client, accepted: &Accepted) -> Result<ApprovalState> {
             "approved" => return Ok(state),
             "failed" => {
                 return Err(Error::new(format!(
-                    "the phone approved, but the broker could not apply the change: {}",
+                    "the passkey approved, but the broker could not apply the change: {}",
                     state.error.unwrap_or_default()
                 )));
             }
@@ -179,75 +185,85 @@ pub fn rotate(name: &str) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `bas policy edit`.
+/// One entry of `bas policy show`.
+#[derive(Serialize)]
+struct PolicyRow<'a> {
+    kind: &'static str,
+    name: &'a str,
+    #[serde(rename = "use")]
+    usage: String,
+    // A list, not an object: a label such as `repo` repeats once per repository.
+    details: Vec<Detail<'a>>,
+}
+
+#[derive(Serialize)]
+struct Detail<'a> {
+    label: &'a str,
+    value: &'a str,
+}
+
 /// `bas policy show`: lists the entries of the active policy, without values.
 pub fn policy_show(json: bool) -> Result<ExitCode> {
     let policy = crate::runtime()?
         .block_on(client().policy())
         .map_err(broker_error)?;
     let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
-    let rows: Vec<serde_json::Value> = entries
+    let rows: Vec<PolicyRow<'_>> = entries
         .iter()
         .map(|entry| {
-            let reference = entry
-                .details
-                .iter()
-                .find(|(label, _)| label == "ref")
-                .map_or("", |(_, text)| text.as_str());
             let (kind, usage) = match entry.kind {
                 EntryKind::Secret => ("secret", format!("bas run --with {} -- CMD", entry.name)),
-                EntryKind::Helper => ("helper", format!("bas get {reference}")),
-                EntryKind::Ssh => ("ssh", "ssh and git through the broker's ssh-agent".to_owned()),
-                EntryKind::Github => ("github", "gh and git for the listed repositories".to_owned()),
+                EntryKind::Helper => (
+                    "helper",
+                    format!("bas get {}", reference(entry).unwrap_or_default()),
+                ),
+                EntryKind::Ssh => (
+                    "ssh",
+                    "ssh and git through the broker's ssh-agent".to_owned(),
+                ),
+                EntryKind::Github => (
+                    "github",
+                    "gh and git for the listed repositories".to_owned(),
+                ),
                 EntryKind::Tailscale => ("tailscale", "bas run --with tailscale -- CMD".to_owned()),
             };
-            // A list, not an object: a label such as `repo` repeats once per repository.
-            let details: Vec<serde_json::Value> = entry
-                .details
-                .iter()
-                .map(|(label, text)| serde_json::json!({ "label": label, "value": text }))
-                .collect();
-            serde_json::json!({ "kind": kind, "name": entry.name, "use": usage, "details": details })
+            PolicyRow {
+                kind,
+                name: &entry.name,
+                usage,
+                details: entry
+                    .details
+                    .iter()
+                    .map(|(label, value)| Detail { label, value })
+                    .collect(),
+            }
         })
         .collect();
     let mut out = io::stdout().lock();
     let written = if json {
-        crate::output::write_json(
+        output::write_json(
             &mut out,
             &serde_json::json!({ "policy_hash": policy.hash, "entries": rows }),
         )
     } else {
         rows.iter().try_for_each(|row| {
-            let details = entry_details(row);
+            let details: String = row
+                .details
+                .iter()
+                .map(|detail| format!("  {}={}", detail.label, detail.value))
+                .collect();
             writeln!(
                 out,
                 "{:<9}  {}  use: {}{details}",
-                row["kind"].as_str().unwrap_or_default(),
-                row["name"].as_str().unwrap_or_default(),
-                row["use"].as_str().unwrap_or_default(),
+                row.kind, row.name, row.usage
             )
         })
     };
-    written.map_err(|_| Error::new("could not write to stdout"))?;
+    written.map_err(crate::stdout_failed)?;
     Ok(ExitCode::SUCCESS)
 }
 
-/// `  label=text` for each detail of a `bas policy show` row.
-fn entry_details(row: &serde_json::Value) -> String {
-    row["details"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|detail| {
-            format!(
-                "  {}={}",
-                detail["label"].as_str().unwrap_or_default(),
-                detail["value"].as_str().unwrap_or_default()
-            )
-        })
-        .collect()
-}
-
+/// `bas policy edit`.
 pub fn policy_edit() -> Result<ExitCode> {
     let client = client();
     let path = proposal::path().map_err(broker_error)?;
@@ -272,8 +288,7 @@ pub fn policy_edit() -> Result<ExitCode> {
         Outcome::Waiting(accepted) => accepted,
     };
     if let Some(diff) = &accepted.diff {
-        write!(io::stdout().lock(), "{diff}")
-            .map_err(|_| Error::new("could not write to stdout"))?;
+        write!(io::stdout().lock(), "{diff}").map_err(crate::stdout_failed)?;
     }
     let state = wait(&client, &accepted)?;
     sync_proposal(&client, &path)?;
@@ -298,7 +313,7 @@ pub fn passkey_add() -> Result<ExitCode> {
         return Err(Error::new("the bas broker sent an unexpected reply"));
     };
     wait(&client, &accepted)?;
-    say("approved; the approving phone shows the one-time enrollment link")?;
+    say("approved; the approval page shows the one-time enrollment link")?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -345,13 +360,13 @@ pub fn audit(args: AuditArgs) -> Result<ExitCode> {
         } else {
             writeln!(stdout, "{time}  {:<8} {}", field("event"), field("message"))
         };
-        written.map_err(|_| Error::new("could not write to stdout"))?;
+        written.map_err(crate::stdout_failed)?;
     }
     if reply.entries.is_empty() {
-        eprintln!(
+        output::write_error(&format!(
             "no audit entries from the broker at {}",
             client.socket().display()
-        );
+        ));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -448,11 +463,11 @@ pub fn audit(args: AuditArgs) -> Result<ExitCode> {
         } else {
             writeln!(stdout, "{time}  {:<8} {}", field("EVENT"), field("MESSAGE"))
         };
-        written.map_err(|_| Error::new("could not write to stdout"))?;
+        written.map_err(crate::stdout_failed)?;
         count += 1;
     }
     if count == 0 {
-        eprintln!("no audit entries for {unit}");
+        output::write_error(&format!("no audit entries for {unit}"));
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -561,10 +561,8 @@ impl Session {
         {
             Ok(secrets)
         } else {
-            Err(Error::new(format!(
-                "Secrets Manager returned a secret outside the organization of profile '{}'",
-                self.profile.name
-            )))
+            Err(Failure::OtherOrganization
+                .read_error(&self.profile, "retrieve the selected secrets"))
         }
     }
 

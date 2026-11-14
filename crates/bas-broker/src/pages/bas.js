@@ -130,7 +130,7 @@ async function enroll() {
         },
       },
     });
-    show("Enrolled. This phone can now approve bas requests.", "ok");
+    show("Enrolled. This passkey can now approve bas requests.", "ok");
     for (const button of document.querySelectorAll("button")) button.remove();
   } catch (err) {
     show("Not enrolled: " + err.message, "error");

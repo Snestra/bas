@@ -6,7 +6,7 @@ The install puts one program, one systemd unit, and a few root-owned files on th
 contrib/linux/                      installed as
 ├── bas-broker.service              /etc/systemd/system/bas-broker.service
 ├── broker.toml.example             /etc/bas/broker.toml
-├── policy.toml.example             ~/.config/bas/policy.toml (your proposal)
+├── ../policy.toml.example          ~/.config/bas/policy.toml (your proposal)
 ├── shims/
 │   ├── gh                          /usr/local/lib/bas/shims/gh
 │   └── ssh-keygen                  /usr/local/lib/bas/shims/ssh-keygen
@@ -19,9 +19,9 @@ contrib/linux/                      installed as
 You need the following:
 
 - A Linux machine with systemd and `systemd-creds`, and an HTTPS reverse proxy for approvals. Tailscale Serve is one option.
-- `bas` v0.4.0 or later on Linux, v0.5.0 or later on macOS, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
+- `bas` v0.4.0 or later on Linux, v0.8.1 or later on macOS, from a release or built from source, as [Install bas](../getting-started/install.md) describes.
 - A Secrets Manager machine account for the broker and an access token for it. Give the account read access to the project that holds the secrets the policy names, and write access to the project where `bas add` should create new secrets.
-- A passkey device, such as a YubiKey or a phone.
+- A passkey device, such as a YubiKey, or a phone or password manager that holds passkeys.
 
 ```mermaid
 flowchart TD
@@ -161,7 +161,7 @@ The policy says which secrets the proxy may use, for which hosts and requests, a
 
 ```sh
 install -d -m 0700 ~/.config/bas
-install -m 0600 contrib/linux/policy.toml.example ~/.config/bas/policy.toml
+install -m 0600 contrib/policy.toml.example ~/.config/bas/policy.toml
 bas policy edit
 ```
 
@@ -177,7 +177,7 @@ $ bas policy edit
 +[secret.JINA_API_KEY]
 +ref = "bas://home/<secret-id>"
 ...
-Approve on your phone: https://bas.TAILNET.ts.net/a/<approval-id>
+Approve with your passkey: https://bas.TAILNET.ts.net/a/<approval-id>
 Waiting for approval <approval-id> (it expires in 15 minutes)...
 the active policy is now <hash>
 ```
@@ -275,7 +275,7 @@ contrib/macos/                                  installed as
 ├── io.github.bjoernaagaard.bas.rundir.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.rundir.plist
 ├── io.github.bjoernaagaard.bas.broker.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
 ├── broker.toml.example                         /etc/bas/broker.toml
-├── policy.toml.example                         ~/Library/Application Support/bas/policy.toml (your proposal)
+├── ../policy.toml.example                      ~/Library/Application Support/bas/policy.toml (your proposal)
 ├── shims/ssh-keygen                            /usr/local/lib/bas/shims/ssh-keygen
 └── ssh_config.d/10-bas.conf                    /etc/ssh/ssh_config.d/10-bas.conf
 ```
@@ -317,7 +317,7 @@ sudo chown _bas:_bas /var/log/bas/broker.log && sudo chmod 0640 /var/log/bas/bro
 
 The append-only flag lets the broker add lines and stops anyone but root from changing old ones. Only the broker reads the file, and `bas audit` asks the broker for it.
 
-Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a phone never approves a request on the wrong broker. Then load both daemons.
+Install `broker.toml` and set the same keys as in step 4. Each Mac needs its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a passkey never approves a request on the wrong broker. Then load both daemons.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /etc/bas

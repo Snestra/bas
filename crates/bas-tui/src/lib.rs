@@ -48,7 +48,7 @@ pub fn run(start: Start) -> color_eyre::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async {
+    let result = runtime.block_on(async {
         let mut terminal = match ratatui::try_init() {
             Ok(terminal) => terminal,
             Err(err) => {
@@ -62,7 +62,11 @@ pub fn run(start: Start) -> color_eyre::Result<()> {
         let result = run_in(&mut terminal, start).await;
         ratatui::restore();
         result
-    })
+    });
+    // A sign-in can still be waiting for another bas process's lock. Dropping the runtime
+    // would wait for it, so the user could not quit.
+    runtime.shutdown_background();
+    result
 }
 
 async fn run_in(terminal: &mut ratatui::DefaultTerminal, start: Start) -> color_eyre::Result<()> {

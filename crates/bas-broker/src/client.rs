@@ -19,14 +19,14 @@ use crate::protocol::{
 use crate::{Error, ErrorKind};
 
 /// Environment variable that points `bas` at another broker socket, for development.
-pub const SOCKET_VAR: &str = "BAS_BROKER_SOCKET";
+const SOCKET_VAR: &str = "BAS_BROKER_SOCKET";
 
 /// The broker socket: `$BAS_BROKER_SOCKET`, or [`DEFAULT_SOCKET`].
 pub fn socket_path() -> PathBuf {
     std::env::var_os(SOCKET_VAR).map_or_else(|| PathBuf::from(DEFAULT_SOCKET), PathBuf::from)
 }
 
-/// A broker reply that either finished the request or waits for a phone approval.
+/// A broker reply that either finished the request or waits for a passkey approval.
 #[derive(Debug)]
 pub enum Outcome<T> {
     /// HTTP 200.
@@ -129,7 +129,7 @@ impl Client {
         self.call(Method::POST, "/v1/policy", Some(proposal)).await
     }
 
-    /// Asks for an approval that lets the phone enroll one more passkey.
+    /// Asks for an approval that lets the approver enroll one more passkey.
     pub async fn add_passkey(&self) -> Result<Outcome<serde_json::Value>, Error> {
         self.call(Method::POST, "/v1/passkeys", Some(&serde_json::json!({})))
             .await
@@ -151,13 +151,10 @@ impl Client {
         body: Option<&B>,
     ) -> Result<Outcome<T>, Error> {
         let unreachable = |err: &dyn std::fmt::Display| {
-            Error::with_kind(
-                format!(
-                    "could not reach the bas broker at {}: {err}",
-                    self.socket.display()
-                ),
-                ErrorKind::Unreachable,
-            )
+            Error::new(format!(
+                "could not reach the bas broker at {}: {err}",
+                self.socket.display()
+            ))
         };
         let stream = UnixStream::connect(&self.socket)
             .await
@@ -189,12 +186,7 @@ impl Client {
             .await
             .map_err(|err| unreachable(&err))?
             .to_bytes();
-        let unreadable = || {
-            Error::with_kind(
-                "the bas broker sent a reply bas could not read",
-                ErrorKind::Unreachable,
-            )
-        };
+        let unreadable = || Error::new("the bas broker sent a reply bas could not read");
         match status {
             StatusCode::OK => serde_json::from_slice(&body)
                 .map(Outcome::Done)

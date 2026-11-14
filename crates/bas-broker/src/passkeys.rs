@@ -1,14 +1,14 @@
 //! Enrolled passkeys and one-time enrollment links.
 //!
 //! The user asked for convenience, so any passkey works: a YubiKey touched in the browser,
-//! or a passkey on the phone, synced or not. Each approval still needs user verification
+//! or a passkey on a phone, synced or not. Each approval still needs user verification
 //! on the device, which an agent on this machine can't give.
 //!
 //! The passkeys' public keys live in `passkeys.json` in the state directory. While none is
 //! enrolled, the broker writes a one-time enrollment link to `enroll-url` there, which only
-//! the broker's user and root can read. Root opens that link on the phone. Each later
+//! the broker's user and root can read. Root opens that link in a browser. Each later
 //! passkey needs an approval from an enrolled one, and the approval page shows its link to
-//! the approving phone only.
+//! the approval page only.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,6 @@ use crate::{Error, audit};
 
 const PASSKEYS_FILE: &str = "passkeys.json";
 const ENROLL_FILE: &str = "enroll-url";
-/// Why a synced passkey is refused.
 /// How long an enrollment link made by an approval stays usable.
 const LINK_LIFETIME: Duration = Duration::from_secs(15 * 60);
 
@@ -285,7 +284,7 @@ impl Passkeys {
             .map_err(|err| Refused::Ceremony(format!("the assertion failed: {err}")))?;
         if !result.user_verified() {
             return Err(Refused::Ceremony(
-                "the phone did not verify the user".to_owned(),
+                "the passkey did not verify the user".to_owned(),
             ));
         }
         let mut inner = self.lock();

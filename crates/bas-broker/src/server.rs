@@ -249,7 +249,7 @@ fn refusal(status: StatusCode, error: &str, name: Option<&str>) -> Response {
 }
 
 /// Opens an approval and replies 202 with its link.
-fn ask_phone(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> Response {
+fn ask_approval(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> Response {
     let label = kind.label();
     let subject = kind.subject();
     let id = broker.approvals.create(kind, peer);
@@ -269,15 +269,12 @@ fn ask_phone(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> R
 }
 
 async fn status(State(broker): State<Arc<Broker>>, Allowed(_): Allowed) -> Json<Status> {
-    let pending = broker.approvals.pending();
     Json(Status {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         policy_hash: broker.policy().hash().to_owned(),
-        pending: pending
-            .iter()
-            .map(|view| view.id.hyphenated().to_string())
-            .collect(),
-        requests: pending
+        requests: broker
+            .approvals
+            .pending()
             .iter()
             .map(|view| PendingRequest {
                 id: view.id.hyphenated().to_string(),
@@ -313,7 +310,7 @@ async fn run_request(
             return refusal(StatusCode::FORBIDDEN, "denied", Some(name));
         }
     }
-    audit::run(&request.names.join(" "), peer, &claimed_argv);
+    audit::run(&request.names.join(" "), peer, &claimed_argv, &request.cwd);
     Json(RunReply {
         names: request.names,
         proxy: ProxyInfo {
@@ -396,19 +393,12 @@ async fn add_secret(
             Some(&name),
         );
     }
-    let mut candidate = request.entry.clone();
-    candidate.reference = SecretRef {
-        profile: broker.config.profile.name.clone(),
-        id: Uuid::nil(),
-    }
-    .to_string();
-    let checked = policy
-        .with_secret(&name, &candidate)
-        .and_then(|text| Policy::parse(&text, &broker.config.profile.name));
-    if let Err(invalid) = checked {
+    if let Err(invalid) =
+        policy.check_new_secret(&name, &request.entry, &broker.config.profile.name)
+    {
         return refusal(StatusCode::BAD_REQUEST, &invalid.message, Some(&name));
     }
-    ask_phone(
+    ask_approval(
         &broker,
         Kind::AddSecret {
             name,
@@ -427,7 +417,7 @@ async fn rotate(
 ) -> Response {
     let policy = broker.policy();
     if let Some(secret) = policy.secret(&name) {
-        return ask_phone(
+        return ask_approval(
             &broker,
             Kind::Rotate {
                 name: name.clone(),
@@ -456,13 +446,7 @@ async fn rotate(
         _ => false,
     };
     if minted {
-        tracing::info!(
-            bas_audit = 1,
-            event = "rotate",
-            name = name.as_str(),
-            peer_uid = peer.uid,
-            "dropped the cached {name} tokens"
-        );
+        audit::rotate(&name, peer);
         return Json(serde_json::json!({ "rotated": "minted" })).into_response();
     }
     refusal(
@@ -507,7 +491,7 @@ async fn propose_policy(
         .context_radius(3)
         .header("active", "proposed")
         .to_string();
-    ask_phone(
+    ask_approval(
         &broker,
         Kind::Policy {
             toml: proposal.toml,
@@ -521,7 +505,7 @@ async fn propose_policy(
 
 /// `bas passkey add`: opens an approval whose page shows an enrollment link.
 async fn add_passkey(State(broker): State<Arc<Broker>>, Allowed(peer): Allowed) -> Response {
-    ask_phone(&broker, Kind::Passkey, peer, None)
+    ask_approval(&broker, Kind::Passkey, peer, None)
 }
 
 #[derive(Deserialize)]
@@ -574,7 +558,12 @@ async fn audit_entries(
             );
         }
     };
-    match audit::read(&broker.audit_log, since, query.name.as_deref()) {
+    let path = broker.audit_log.clone();
+    let read =
+        tokio::task::spawn_blocking(move || audit::read(&path, since, query.name.as_deref()))
+            .await
+            .unwrap_or_else(|err| Err(Error::new(err.to_string())));
+    match read {
         Ok(entries) => Json(crate::protocol::AuditEntries { entries }).into_response(),
         Err(err) => {
             tracing::warn!("{err}");

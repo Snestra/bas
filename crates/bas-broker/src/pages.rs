@@ -1,4 +1,4 @@
-//! Approval pages, published to the phone with `tailscale serve`. On Linux they listen on
+//! Approval pages, published to the approver with `tailscale serve`. On Linux they listen on
 //! a loopback port below 1024. On macOS they listen on a unix socket, mode 0600, in the
 //! broker's runtime directory, which tailscaled reaches because it runs as root.
 //!
@@ -14,7 +14,7 @@
 //!   passkey with a one-time link.
 //!
 //! Every POST must carry the `Origin` of `approvals.origin`, so a page on another origin
-//! cannot deny requests or start ceremonies from the phone's browser.
+//! cannot deny requests or start ceremonies from the approval page.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -441,18 +441,25 @@ async fn finish(
         kind.label(),
         &format!("{} by {label}", kind.subject()),
     );
-    let applied = broker.apply(id, &kind, value).await;
-    let reply = match &applied.outcome {
-        Outcome::Approved(result) => serde_json::json!({
-            "state": "approved",
-            "result": result,
-            "enroll_url": applied.enroll_url,
-        }),
-        Outcome::Failed(error) => serde_json::json!({ "state": "failed", "error": error }),
-        other => serde_json::json!({ "state": state_label(other) }),
-    };
-    broker.approvals.finish(id, applied.outcome);
-    harden(Json(reply).into_response())
+    // A spawned task finishes the request even when the client hangs up mid-apply.
+    let applying = tokio::spawn(async move {
+        let applied = broker.apply(id, &kind, value).await;
+        let reply = match &applied.outcome {
+            Outcome::Approved(result) => serde_json::json!({
+                "state": "approved",
+                "result": result,
+                "enroll_url": applied.enroll_url,
+            }),
+            Outcome::Failed(error) => serde_json::json!({ "state": "failed", "error": error }),
+            other => serde_json::json!({ "state": state_label(other) }),
+        };
+        broker.approvals.finish(id, applied.outcome);
+        reply
+    });
+    match applying.await {
+        Ok(reply) => harden(Json(reply).into_response()),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
 }
 
 async fn deny(
@@ -489,8 +496,9 @@ async fn enroll_page(State(broker): State<Arc<Broker>>, Path(token): Path<String
             &[],
         );
     }
-    let body = "<p>This enrolls a passkey that approves bas requests. Use a passkey that \
-                lives only on this phone, not one synced to other devices.</p>\
+    let body = "<p>This enrolls a passkey that approves bas requests. It can live in a \
+                password manager, on this device, or on a security key. Each approval asks \
+                it to verify you.</p>\
                 <label for=\"label\">Name for this passkey</label>\
                 <input id=\"label\" type=\"text\" autocomplete=\"off\" maxlength=\"64\">\
                 <div class=\"actions\"><button id=\"enroll\">Create passkey</button></div>\

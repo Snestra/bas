@@ -538,7 +538,6 @@ dependencies = [
  "bas-broker",
  "bas-core",
  "bas-tui",
- "bitwarden",
  "chrono",
  "clap",
  "crossterm",
@@ -581,7 +580,6 @@ dependencies = [
  "tracing-journald",
  "tracing-subscriber",
  "url",
- "uuid",
  "webauthn-rs",
  "zeroize",
 ]

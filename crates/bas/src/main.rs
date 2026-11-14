@@ -14,10 +14,12 @@ mod helper;
 mod input;
 mod mask;
 mod output;
+mod private_toml;
 mod save;
 mod template;
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -32,8 +34,6 @@ use bas_core::reference::{self, Binding, EnvName, ProfileName, SecretRef, parse_
 use bas_core::secrets::Session;
 use clap::Parser;
 use clap::error::ErrorKind;
-
-use std::ffi::OsString;
 
 use crate::agent_access::{Listener, Pairing};
 use crate::cli::{
@@ -304,7 +304,7 @@ fn refuse_on_broker_host(verb: &str) -> Result<()> {
         return Err(Error::usage(format!(
             "this machine runs a bas broker, so bas get reads only [helper.NAME] tables of the \
              broker's policy, and bas helper {verb} has no effect. Change them with `bas \
-             policy edit`, which your phone approves"
+             policy edit`, which a passkey approves"
         )));
     }
     Ok(())
@@ -491,7 +491,7 @@ fn run(bindings: &[Binding], brokered: &[EnvName], command: &[OsString]) -> Resu
     Err(execute::run(bindings, brokered, program, arguments))
 }
 
-fn stdout_failed(_: io::Error) -> Error {
+pub(crate) fn stdout_failed(_: io::Error) -> Error {
     Error::new("could not write to standard output")
 }
 
@@ -611,7 +611,7 @@ fn broker_answers() -> bool {
     let client = bas_broker::client::Client::new(&bas_broker::client::socket_path());
     runtime().is_ok_and(|runtime| {
         runtime.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(2), client.status())
+            tokio::time::timeout(Duration::from_secs(2), client.status())
                 .await
                 .is_ok_and(|status| status.is_ok())
         })

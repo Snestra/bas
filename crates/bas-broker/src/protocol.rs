@@ -27,10 +27,7 @@ pub struct Status {
     pub version: String,
     /// SHA-256 of the active policy text, in lowercase hex.
     pub policy_hash: String,
-    /// IDs of requests that wait for an approval.
-    pub pending: Vec<String>,
-    /// The same requests, with what each asks for. Brokers before 0.5 leave it out.
-    #[serde(default)]
+    /// Requests that wait for an approval, with what each asks for.
     pub requests: Vec<PendingRequest>,
 }
 
@@ -49,7 +46,7 @@ pub struct PendingRequest {
     pub created_at: String,
     /// Seconds until it expires.
     pub expires_in: u64,
-    /// Page to open on the phone.
+    /// Page to open in a browser.
     pub url: String,
 }
 
@@ -144,7 +141,7 @@ pub struct ActivePolicy {
 /// Reply to a request that waits for a passkey approval (HTTP 202).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Accepted {
-    /// The approval to open on the phone.
+    /// The approval to open in a browser.
     pub approval: ApprovalLink,
     /// For a policy change, the unified diff from the active policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +153,7 @@ pub struct Accepted {
 pub struct ApprovalLink {
     /// Approval ID.
     pub id: String,
-    /// Page to open on the phone.
+    /// Page to open in a browser.
     pub url: String,
 }
 

@@ -1,6 +1,6 @@
 # Security notes
 
-`bas` is at version 0.8.3 and isn't ready for production use. The notes below say what each part protects against and where its limits are.
+`bas` isn't ready for production use. The notes below say what each part protects against and where its limits are.
 
 ## Direct access
 
@@ -22,13 +22,13 @@ The broker keeps values away from your user only if your user has no way to root
 | Decrypt the sealed token | The credential is sealed for the system and readable by root only | None without root |
 | Read the broker's memory or environment | A separate user, `ProtectProc=invisible`, `LimitCORE=0`, no swap | None without root |
 | Widen access by editing `policy.toml` | The broker uses only the approved copy and shows the diff on the approval page | You approve a diff without reading it |
-| Approve its own request | WebAuthn with user verification on your device | A compromised phone, or a passkey synced to a machine where an agent runs |
+| Approve its own request | WebAuthn with user verification on your device | A compromised passkey device, or a passkey synced to a machine where an agent runs |
 | Show you a false approval page | The configured approval hostname, port 793 below 1024, and an HTTPS reverse proxy controlled only by administrators | A secret typed into a page on another origin |
 | Read a token from `gh` or git | The proxy adds the token, and the program never receives it | None found |
 | Send a credential to another host | Injection for exact policy hosts only, upstream TLS verified, inner `Host` equal to the `CONNECT` host, port 443 only | A policy host whose response repeats the request headers |
 | Forge or delete audit entries | On Linux, journald sets `_SYSTEMD_UNIT`. On macOS, the audit file is root-owned with the append-only flag and unreadable to your user | Root |
 
-The proxy and, on Linux, the approval pages listen on loopback addresses and don't check the caller's user ID. On macOS the approval pages listen on a socket only `_bas` and root can open, and no firewall rule guards the proxy port. On a machine with other local users, add a firewall rule that lets only your user and `bas` connect to ports 3128 and 793, for example an nftables rule that matches `meta skuid`.
+The proxy and, on Linux, the approval pages listen on loopback addresses and don't check the caller's user ID. On macOS the approval pages listen on a socket only `_bas` and root can open, and no firewall rule guards the proxy port. On a machine with other local users, add a firewall rule that lets only your user and `bas` connect to ports 3128 and 793, for example an nftables rule that matches `meta skuid`. A local user who can reach the approval port can call the begin endpoint again and again and push out a pending approval's real challenge, so the approver must retry. That caller cannot approve anything.
 
 The proxy doesn't inspect responses. A host that echoes request headers can return the credential to the program, so keep `allow` patterns narrow.
 

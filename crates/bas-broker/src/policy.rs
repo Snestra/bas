@@ -288,6 +288,11 @@ pub fn ambiguous_path(path: &str) -> bool {
             .any(|segment| segment == "." || segment == "..")
 }
 
+/// Names `bas run` takes to mean the `[github]` and `[tailscale]` tables.
+const BUILT_IN_NAMES: &[&str] = &["github", "tailscale"];
+const BUILT_IN_REASON: &str =
+    "the name is taken by the [github] and [tailscale] tables, so pick another";
+
 impl Policy {
     /// Parses and checks a policy text. Every `ref` must name `profile`, the broker's
     /// profile.
@@ -353,6 +358,9 @@ impl Policy {
             let invalid = |reason: &str| at(&table, format!("secret.{name}: {reason}"));
             name.parse::<EnvName>()
                 .map_err(|_| invalid("the name must be a valid environment variable name"))?;
+            if BUILT_IN_NAMES.contains(&name.as_str()) {
+                return Err(invalid(BUILT_IN_REASON));
+            }
             let reference = reference(&entry.reference, &table, "ref")?;
             let rule = proxy_rule(entry).map_err(|reason| invalid(&reason))?;
             if let Some(other) = hosts.insert(rule.host.clone(), format!("secret.{name}")) {
@@ -380,6 +388,9 @@ impl Policy {
                     format!("helper.{name}: the name must be a valid environment variable name"),
                 )
             })?;
+            if BUILT_IN_NAMES.contains(&name.as_str()) {
+                return Err(at(&table, format!("helper.{name}: {BUILT_IN_REASON}")));
+            }
             helpers.insert(name, reference(&entry.reference, &table, "ref")?);
         }
 
@@ -481,8 +492,30 @@ impl Policy {
             .map(Route::Secret)
     }
 
-    /// This policy's text with one more `[secret.NAME]` table at the end.
-    pub fn with_secret(&self, name: &str, entry: &SecretFile) -> Result<String, Invalid> {
+    /// Checks that adding `entry` as `[secret.NAME]` gives a valid policy, before its secret
+    /// exists. A nil ID stands in for the reference the broker creates later.
+    pub fn check_new_secret(
+        &self,
+        name: &str,
+        entry: &SecretFile,
+        profile: &ProfileName,
+    ) -> Result<(), Invalid> {
+        let mut candidate = entry.clone();
+        candidate.reference = SecretRef {
+            profile: profile.clone(),
+            id: bas_core::Uuid::nil(),
+        }
+        .to_string();
+        self.with_secret(name, &candidate, profile).map(drop)
+    }
+
+    /// This policy with one more `[secret.NAME]` table at the end.
+    pub fn with_secret(
+        &self,
+        name: &str,
+        entry: &SecretFile,
+        profile: &ProfileName,
+    ) -> Result<Self, Invalid> {
         let mut table = BTreeMap::new();
         table.insert(name.to_owned(), entry.clone());
         let mut wrapper = BTreeMap::new();
@@ -497,7 +530,7 @@ impl Policy {
         }
         text.push('\n');
         text.push_str(&added);
-        Ok(text)
+        Self::parse(&text, profile)
     }
 }
 

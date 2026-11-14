@@ -76,7 +76,7 @@ bas helper revoke bas://work/<secret-id>
 - Before it prints, it appends one JSON line to `audit.log` with the reference, the parent process, and the working directory, and never the value. If `bas` can't write the line, it prints nothing.
 - A reference of a remote profile still needs approval or a grant on the listener.
 
-On a machine with a [bas broker](../broker/overview.md), the broker holds the machine token, so `bas get` asks the broker instead, and the broker answers only for references in a [`[helper.NAME]`](../broker/policy.md#helpername) entry of its policy. Add the entry with `bas policy edit`, which your phone approves. There, `bas helper list` lists those entries, and `bas helper allow` and `bas helper revoke` refuse, because the local list has no effect.
+On a machine with a [bas broker](../broker/overview.md), the broker holds the machine token, so `bas get` asks the broker instead, and the broker answers only for references in a [`[helper.NAME]`](../broker/policy.md#helpername) entry of its policy. Add the entry with `bas policy edit`, which your passkey approves. There, `bas helper list` lists those entries, and `bas helper allow` and `bas helper revoke` refuse, because the local list has no effect.
 
 ## Keep bindings in a template
 

@@ -15,14 +15,14 @@ use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind,
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::USER_AGENT;
-use crate::app::{Status, is_typing};
+use crate::app::is_typing;
 use crate::event::{AppEvent, Event, EventHandler};
-use crate::ui::{HIDDEN, panel};
+use crate::ui::{HIDDEN, Status, panel, status_line};
 
 /// State of the sign-in screen.
 struct SignIn {
@@ -72,10 +72,30 @@ pub async fn run(
                         );
                         let name = screen.name.clone();
                         events.spawn(async move {
-                            AppEvent::Connected(Box::new(
-                                sign_in(name, token).await.map_err(color_eyre::Report::new),
-                            ))
+                            match sign_in(name, &token).await {
+                                Ok(session) => AppEvent::SignedIn(Box::new((session, token))),
+                                Err(err) => AppEvent::Connected(Box::new(Err(err))),
+                            }
                         });
+                    }
+                }
+            }
+            Event::App(AppEvent::SignedIn(signed_in)) => {
+                let (session, token) = *signed_in;
+                match ConfigLock::try_acquire() {
+                    Ok(lock) => {
+                        if lock.is_none() {
+                            screen.status = Status::Info(
+                                "Waiting for another bas process that is changing grants or \
+                                 profiles, or delivering a secret"
+                                    .to_owned(),
+                            );
+                        }
+                        events.spawn(save(lock, session, token));
+                    }
+                    Err(err) => {
+                        screen.busy = false;
+                        screen.status = Status::Error(format!("{err}. Paste the token again"));
                     }
                 }
             }
@@ -92,22 +112,31 @@ pub async fn run(
     }
 }
 
-/// Signs the token in, learning the organization and region, and saves the profile with the
-/// token in the OS credential store.
-async fn sign_in(name: ProfileName, token: MachineToken) -> Result<Session, bas_core::Error> {
+/// Signs the token in, learning the organization and region.
+async fn sign_in(name: ProfileName, token: &MachineToken) -> color_eyre::Result<Session> {
     let request = LoginRequest {
         name,
         organization: None,
         endpoints: None,
         credential: CredentialSource::OsStore,
     };
-    let previous = request.check(&Profiles::load()?)?;
-    let session = request
-        .sign_in(previous.as_ref(), &token, USER_AGENT)
-        .await?;
-    let lock = ConfigLock::acquire()?;
-    login::save(&lock, session.profile(), &token)?;
-    Ok(session)
+    let profiles = tokio::task::spawn_blocking(Profiles::load).await??;
+    let previous = request.check(&profiles)?;
+    Ok(request
+        .sign_in(previous.as_ref(), token, USER_AGENT)
+        .await?)
+}
+
+/// Saves the signed-in profile with the token in the OS credential store, first waiting
+/// for the configuration lock when `lock` is `None`.
+async fn save(lock: Option<ConfigLock>, session: Session, token: MachineToken) -> AppEvent {
+    let saved = tokio::task::spawn_blocking(move || -> color_eyre::Result<Session> {
+        let lock = lock.map_or_else(ConfigLock::acquire, Ok)?;
+        login::save(&lock, session.profile(), &token)?;
+        Ok(session)
+    })
+    .await;
+    AppEvent::Connected(Box::new(saved.unwrap_or_else(|err| Err(err.into()))))
 }
 
 impl SignIn {
@@ -178,11 +207,7 @@ impl Widget for &SignIn {
             .wrap(Wrap { trim: false })
             .block(panel("Sign in"))
             .render(body, buf);
-        match &self.status {
-            Status::Info(text) => Line::from(format!(" {text}")),
-            Status::Error(text) => Line::from(format!(" {text}")).fg(Color::Red).bold(),
-        }
-        .render(status, buf);
+        status_line(&self.status).render(status, buf);
         Line::from(" paste the token  Enter sign in  Backspace erase  Esc quit")
             .dim()
             .render(keys, buf);

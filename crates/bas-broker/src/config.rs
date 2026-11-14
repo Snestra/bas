@@ -84,7 +84,7 @@ pub struct Config {
     pub project: Option<Uuid>,
     /// Where the approval pages listen.
     pub approvals_listen: Listen,
-    /// HTTPS origin the phone opens the approval pages on. Its host is the WebAuthn
+    /// HTTPS origin the approver opens the approval pages on. Its host is the WebAuthn
     /// relying party ID.
     pub approvals_origin: Url,
 }
@@ -142,7 +142,7 @@ impl Config {
         })
     }
 
-    /// The approval page for one request, as the phone opens it.
+    /// The approval page for one request, as the approver opens it.
     pub fn approval_url(&self, id: Uuid) -> String {
         format!("{}a/{}", self.approvals_origin, id.hyphenated())
     }

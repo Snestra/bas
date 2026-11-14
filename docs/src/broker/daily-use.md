@@ -147,4 +147,4 @@ bas tui --broker
 └── Requests             sending, pending, approved, done, denied, expired, refused, failed
 ```
 
-Each change still waits for a passkey on the approval page, and a new value is typed only there. The requests list also shows requests that other clients left pending, so you can see what waits for your phone. A refused request changed nothing. A failed request either did not reach the broker, or the phone approved it and the broker could not apply it.
+Each change still waits for a passkey on the approval page, and a new value is typed only there. The requests list also shows requests that other clients left pending, so you can see what waits for your approval. A refused request changed nothing. A failed request either did not reach the broker, or the passkey approved it and the broker could not apply it.
