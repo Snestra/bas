@@ -151,13 +151,10 @@ impl Client {
         body: Option<&B>,
     ) -> Result<Outcome<T>, Error> {
         let unreachable = |err: &dyn std::fmt::Display| {
-            Error::with_kind(
-                format!(
-                    "could not reach the bas broker at {}: {err}",
-                    self.socket.display()
-                ),
-                ErrorKind::Unreachable,
-            )
+            Error::new(format!(
+                "could not reach the bas broker at {}: {err}",
+                self.socket.display()
+            ))
         };
         let stream = UnixStream::connect(&self.socket)
             .await
@@ -189,12 +186,7 @@ impl Client {
             .await
             .map_err(|err| unreachable(&err))?
             .to_bytes();
-        let unreadable = || {
-            Error::with_kind(
-                "the bas broker sent a reply bas could not read",
-                ErrorKind::Unreachable,
-            )
-        };
+        let unreadable = || Error::new("the bas broker sent a reply bas could not read");
         match status {
             StatusCode::OK => serde_json::from_slice(&body)
                 .map(Outcome::Done)

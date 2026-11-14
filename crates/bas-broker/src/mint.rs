@@ -7,7 +7,7 @@
 //! tailscale` drops them at once.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use bas_core::secrets::Session;
@@ -45,11 +45,15 @@ impl Minted {
     }
 }
 
+/// One cached token. Its lock is held from the freshness check through the mint, so
+/// callers that arrive meanwhile wait and reuse the new token instead of minting their own.
+type Slot = Arc<tokio::sync::Mutex<Option<Minted>>>;
+
 /// Mints and caches tokens.
 pub struct Minter {
     session: Session,
-    github: Mutex<BTreeMap<String, Minted>>,
-    tailscale: Mutex<Option<Minted>>,
+    github: Mutex<BTreeMap<String, Slot>>,
+    tailscale: Mutex<Slot>,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +68,7 @@ impl Minter {
         Self {
             session,
             github: Mutex::new(BTreeMap::new()),
-            tailscale: Mutex::new(None),
+            tailscale: Mutex::new(Slot::default()),
         }
     }
 
@@ -81,21 +85,32 @@ impl Minter {
         *self
             .tailscale
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = None;
+            .unwrap_or_else(PoisonError::into_inner) = Slot::default();
     }
 
     /// An installation token for one repository, with the permissions the policy lists.
     pub async fn github(&self, github: &Github, repo: &Repo) -> Result<Minted, Error> {
-        let key = repo.name.to_ascii_lowercase();
-        if let Some(cached) = self
+        let slot = self
             .github
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&key)
-            .filter(|cached| cached.fresh())
-        {
-            return Ok(cached.clone());
-        }
+            .entry(repo.name.to_ascii_lowercase())
+            .or_default()
+            .clone();
+        cached(slot, self.mint_github(github, repo)).await
+    }
+
+    /// A Tailscale API access token with the policy's scopes.
+    pub async fn tailscale(&self, tailscale: &Tailscale) -> Result<Minted, Error> {
+        let slot = self
+            .tailscale
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        cached(slot, self.mint_tailscale(tailscale)).await
+    }
+
+    async fn mint_github(&self, github: &Github, repo: &Repo) -> Result<Minted, Error> {
         let failed = |reason: String| {
             Error::new(format!(
                 "could not mint a GitHub token for {}: {reason}",
@@ -143,24 +158,10 @@ impl Minter {
             expires: expires.into(),
         };
         audit::mint("github", &repo.name, &reply.expires_at);
-        self.github
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key, minted.clone());
         Ok(minted)
     }
 
-    /// A Tailscale API access token with the policy's scopes.
-    pub async fn tailscale(&self, tailscale: &Tailscale) -> Result<Minted, Error> {
-        if let Some(cached) = self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .filter(|cached| cached.fresh())
-        {
-            return Ok(cached.clone());
-        }
+    async fn mint_tailscale(&self, tailscale: &Tailscale) -> Result<Minted, Error> {
         let failed =
             |reason: String| Error::new(format!("could not mint a Tailscale token: {reason}"));
         let read = |what: &'static str| {
@@ -206,10 +207,20 @@ impl Minter {
             .format(&Rfc3339)
             .unwrap_or_default();
         audit::mint("tailscale", &tailscale.scopes.join(" "), &expires_text);
-        *self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(minted.clone());
         Ok(minted)
     }
+}
+
+/// The token in `slot` while it is fresh, else the one `mint` makes, which `slot` keeps.
+async fn cached(
+    slot: Slot,
+    mint: impl Future<Output = Result<Minted, Error>>,
+) -> Result<Minted, Error> {
+    let mut cached = slot.lock().await;
+    if let Some(minted) = cached.as_ref().filter(|minted| minted.fresh()) {
+        return Ok(minted.clone());
+    }
+    let minted = mint.await?;
+    *cached = Some(minted.clone());
+    Ok(minted)
 }

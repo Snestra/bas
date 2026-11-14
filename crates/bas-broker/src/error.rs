@@ -13,8 +13,6 @@ pub struct Error {
 pub enum ErrorKind {
     /// The broker answered and refused the request, so nothing changed.
     Refused,
-    /// The broker could not be reached, or its answer could not be read.
-    Unreachable,
     /// Anything else.
     Other,
 }
