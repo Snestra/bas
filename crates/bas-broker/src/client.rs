@@ -26,7 +26,7 @@ pub fn socket_path() -> PathBuf {
     std::env::var_os(SOCKET_VAR).map_or_else(|| PathBuf::from(DEFAULT_SOCKET), PathBuf::from)
 }
 
-/// A broker reply that either finished the request or waits for a phone approval.
+/// A broker reply that either finished the request or waits for a passkey approval.
 #[derive(Debug)]
 pub enum Outcome<T> {
     /// HTTP 200.
@@ -129,7 +129,7 @@ impl Client {
         self.call(Method::POST, "/v1/policy", Some(proposal)).await
     }
 
-    /// Asks for an approval that lets the phone enroll one more passkey.
+    /// Asks for an approval that lets the approver enroll one more passkey.
     pub async fn add_passkey(&self) -> Result<Outcome<serde_json::Value>, Error> {
         self.call(Method::POST, "/v1/passkeys", Some(&serde_json::json!({})))
             .await

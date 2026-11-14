@@ -36,7 +36,7 @@ pub struct Broker {
     pub keys: Arc<ssh_agent::Keys>,
     /// GitHub and Tailscale token minter.
     pub minter: Minter,
-    /// Requests that wait for the phone.
+    /// Requests that wait for an approval.
     pub approvals: Approvals,
     /// Enrolled passkeys.
     pub passkeys: Passkeys,
@@ -46,7 +46,7 @@ pub struct Broker {
     applying: tokio::sync::Mutex<()>,
 }
 
-/// What an approved request produced, and a link shown only to the approving phone.
+/// What an approved request produced, and a link shown only to the approval page.
 pub struct Applied {
     /// Final state.
     pub outcome: Outcome,
@@ -85,7 +85,7 @@ impl Broker {
         Arc::clone(&self.policy.read().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Applies an approved request. `value` is the text typed on the phone.
+    /// Applies an approved request. `value` is the text typed on the approval page.
     pub async fn apply(&self, id: Uuid, kind: &Kind, value: Option<SecretText>) -> Applied {
         let _applying = self.applying.lock().await;
         let mut enroll_url = None;

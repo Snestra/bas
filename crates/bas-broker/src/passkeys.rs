@@ -1,14 +1,14 @@
 //! Enrolled passkeys and one-time enrollment links.
 //!
 //! The user asked for convenience, so any passkey works: a YubiKey touched in the browser,
-//! or a passkey on the phone, synced or not. Each approval still needs user verification
+//! or a passkey on a phone, synced or not. Each approval still needs user verification
 //! on the device, which an agent on this machine can't give.
 //!
 //! The passkeys' public keys live in `passkeys.json` in the state directory. While none is
 //! enrolled, the broker writes a one-time enrollment link to `enroll-url` there, which only
-//! the broker's user and root can read. Root opens that link on the phone. Each later
+//! the broker's user and root can read. Root opens that link in a browser. Each later
 //! passkey needs an approval from an enrolled one, and the approval page shows its link to
-//! the approving phone only.
+//! the approval page only.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -49,7 +49,7 @@ pub struct PendingRequest {
     pub created_at: String,
     /// Seconds until it expires.
     pub expires_in: u64,
-    /// Page to open on the phone.
+    /// Page to open in a browser.
     pub url: String,
 }
 
@@ -144,7 +144,7 @@ pub struct ActivePolicy {
 /// Reply to a request that waits for a passkey approval (HTTP 202).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Accepted {
-    /// The approval to open on the phone.
+    /// The approval to open in a browser.
     pub approval: ApprovalLink,
     /// For a policy change, the unified diff from the active policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +156,7 @@ pub struct Accepted {
 pub struct ApprovalLink {
     /// Approval ID.
     pub id: String,
-    /// Page to open on the phone.
+    /// Page to open in a browser.
     pub url: String,
 }
 

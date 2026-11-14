@@ -1,4 +1,4 @@
-//! Approval pages, published to the phone with `tailscale serve`. On Linux they listen on
+//! Approval pages, published to the approver with `tailscale serve`. On Linux they listen on
 //! a loopback port below 1024. On macOS they listen on a unix socket, mode 0600, in the
 //! broker's runtime directory, which tailscaled reaches because it runs as root.
 //!
@@ -14,7 +14,7 @@
 //!   passkey with a one-time link.
 //!
 //! Every POST must carry the `Origin` of `approvals.origin`, so a page on another origin
-//! cannot deny requests or start ceremonies from the phone's browser.
+//! cannot deny requests or start ceremonies from the approval page.
 
 use std::fmt::Write as _;
 use std::sync::Arc;

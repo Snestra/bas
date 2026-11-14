@@ -249,7 +249,7 @@ fn refusal(status: StatusCode, error: &str, name: Option<&str>) -> Response {
 }
 
 /// Opens an approval and replies 202 with its link.
-fn ask_phone(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> Response {
+fn ask_approval(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -> Response {
     let label = kind.label();
     let subject = kind.subject();
     let id = broker.approvals.create(kind, peer);
@@ -401,7 +401,7 @@ async fn add_secret(
     {
         return refusal(StatusCode::BAD_REQUEST, &invalid.message, Some(&name));
     }
-    ask_phone(
+    ask_approval(
         &broker,
         Kind::AddSecret {
             name,
@@ -420,7 +420,7 @@ async fn rotate(
 ) -> Response {
     let policy = broker.policy();
     if let Some(secret) = policy.secret(&name) {
-        return ask_phone(
+        return ask_approval(
             &broker,
             Kind::Rotate {
                 name: name.clone(),
@@ -494,7 +494,7 @@ async fn propose_policy(
         .context_radius(3)
         .header("active", "proposed")
         .to_string();
-    ask_phone(
+    ask_approval(
         &broker,
         Kind::Policy {
             toml: proposal.toml,
@@ -508,7 +508,7 @@ async fn propose_policy(
 
 /// `bas passkey add`: opens an approval whose page shows an enrollment link.
 async fn add_passkey(State(broker): State<Arc<Broker>>, Allowed(peer): Allowed) -> Response {
-    ask_phone(&broker, Kind::Passkey, peer, None)
+    ask_approval(&broker, Kind::Passkey, peer, None)
 }
 
 #[derive(Deserialize)]

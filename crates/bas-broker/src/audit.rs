@@ -1,7 +1,8 @@
 //! Audit entries for every credential the broker hands out, adds, or refuses.
 //!
 //! Each audit entry carries `BAS_AUDIT=1` and `EVENT`, plus `NAME`, `PEER_UID`, `PEER_PID`,
-//! `HOST`, `APPROVAL_ID`, `CLAIMED_ARGV`, and `CLAIMED_CWD` where they apply. No entry ever holds a value.
+//! `HOST`, `APPROVAL_ID`, `CLAIMED_ARGV`, and `CLAIMED_CWD` where they apply. No entry ever
+//! holds a value.
 //!
 //! On Linux the entries go to the system journal. journald adds `_SYSTEMD_UNIT` itself, so a
 //! client cannot forge an entry for the broker's unit.

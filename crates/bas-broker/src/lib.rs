@@ -5,7 +5,7 @@
 //! credentials. It serves an HTTP/1.1 and JSON API on a unix socket, where it identifies
 //! each caller by the kernel's peer credentials; an HTTPS proxy on a loopback port that adds
 //! a credential to requests for hosts named in the active policy; an ssh-agent that signs
-//! with policy keys; and approval pages where a passkey on the phone approves changes. No
+//! with policy keys; and approval pages where a passkey approves changes. No
 //! credential value ever leaves it. Each use, change, and refusal is recorded with
 //! `BAS_AUDIT=1`: in the system journal on Linux, and in an append-only file on macOS.
 //!
