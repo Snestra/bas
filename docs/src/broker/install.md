@@ -6,7 +6,7 @@ The install puts one program, one systemd unit, and a few root-owned files on th
 contrib/linux/                      installed as
 ├── bas-broker.service              /etc/systemd/system/bas-broker.service
 ├── broker.toml.example             /etc/bas/broker.toml
-├── policy.toml.example             ~/.config/bas/policy.toml (your proposal)
+├── ../policy.toml.example          ~/.config/bas/policy.toml (your proposal)
 ├── shims/
 │   ├── gh                          /usr/local/lib/bas/shims/gh
 │   └── ssh-keygen                  /usr/local/lib/bas/shims/ssh-keygen
@@ -161,7 +161,7 @@ The policy says which secrets the proxy may use, for which hosts and requests, a
 
 ```sh
 install -d -m 0700 ~/.config/bas
-install -m 0600 contrib/linux/policy.toml.example ~/.config/bas/policy.toml
+install -m 0600 contrib/policy.toml.example ~/.config/bas/policy.toml
 bas policy edit
 ```
 
@@ -275,7 +275,7 @@ contrib/macos/                                  installed as
 ├── io.github.bjoernaagaard.bas.rundir.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.rundir.plist
 ├── io.github.bjoernaagaard.bas.broker.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
 ├── broker.toml.example                         /etc/bas/broker.toml
-├── policy.toml.example                         ~/Library/Application Support/bas/policy.toml (your proposal)
+├── ../policy.toml.example                      ~/Library/Application Support/bas/policy.toml (your proposal)
 ├── shims/ssh-keygen                            /usr/local/lib/bas/shims/ssh-keygen
 └── ssh_config.d/10-bas.conf                    /etc/ssh/ssh_config.d/10-bas.conf
 ```

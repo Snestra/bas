@@ -1,1 +1,0 @@
--rwxr-xr-x@ 1 bsa  staff  11115952 Nov  6 00:52 target/release/bas-tui

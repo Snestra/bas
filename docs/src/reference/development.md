@@ -8,8 +8,9 @@ crates/
 ├── bas-core/     profiles, references, the credential store, Secrets Manager calls
 ├── bas-tui/      the terminal UI
 └── bas-broker/   the broker, Linux and macOS
-contrib/linux/    unit, settings, policy example, shims, and ssh config for the broker
-contrib/macos/    LaunchDaemons, settings, policy example, shim, and ssh config for the broker
+contrib/policy.toml.example    policy example for both platforms
+contrib/linux/    unit, settings, shims, and ssh config for the broker
+contrib/macos/    LaunchDaemons, settings, shim, and ssh config for the broker
 docs/             this site, built with mdBook
 ```
 
@@ -17,7 +18,7 @@ docs/             this site, built with mdBook
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 cargo doc --locked --no-deps
 cargo build --locked --release --bin bas --example e2e
 ./target/release/examples/e2e offline --bas "$(pwd)/target/release/bas" --artifacts "$(pwd)/target/e2e/local"
