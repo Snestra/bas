@@ -64,43 +64,57 @@ impl Masker {
                 Err(err) => return Err(err),
             };
             pending.extend_from_slice(&chunk[..read]);
-            let held = self.write_settled(&pending, &mut to)?;
+            let held = self.write_masked(&pending, &mut to, false)?;
             let settled = pending.len() - held;
             pending.drain(..settled);
             to.flush()?;
         }
-        to.write_all(&pending)?;
+        self.write_masked(&pending, &mut to, true)?;
         to.flush()
     }
 
-    /// Writes the part of `buffer` that can no longer change, and returns how many bytes at
-    /// its end were held back.
-    fn write_settled(&self, buffer: &[u8], to: &mut impl Write) -> io::Result<usize> {
+    /// Writes `buffer` with every value replaced, and returns how many bytes at its end were
+    /// held back. Before the end of input, the longest end of `buffer` that is the start of
+    /// some value is held back, even when it already holds a shorter value, because the next
+    /// read could complete the longer one.
+    fn write_masked(
+        &self,
+        buffer: &[u8],
+        to: &mut impl Write,
+        end_of_input: bool,
+    ) -> io::Result<usize> {
         let Some(finder) = &self.finder else {
             to.write_all(buffer)?;
             return Ok(0);
         };
+        let cut = if end_of_input {
+            buffer.len()
+        } else {
+            buffer.len() - self.partial_value_at_end(buffer)
+        };
         let mut written = 0;
         for found in finder.find_iter(buffer) {
+            if found.start() >= cut {
+                break;
+            }
             to.write_all(&buffer[written..found.start()])?;
             to.write_all(&self.labels[found.pattern().as_usize()])?;
             written = found.end();
         }
-        let rest = &buffer[written..];
-        let held = self.partial_value_at_end(rest);
-        to.write_all(&rest[..rest.len() - held])?;
-        Ok(held)
+        let settled = written.max(cut);
+        to.write_all(&buffer[written..settled])?;
+        Ok(buffer.len() - settled)
     }
 
-    /// Length of the longest end of `rest` that is the start of some value.
-    fn partial_value_at_end(&self, rest: &[u8]) -> usize {
+    /// Length of the longest end of `buffer` that is the start of some value but not all of it.
+    fn partial_value_at_end(&self, buffer: &[u8]) -> usize {
         self.values
             .iter()
             .map(|value| {
-                let longest = (value.len() - 1).min(rest.len());
+                let longest = (value.len() - 1).min(buffer.len());
                 (1..=longest)
                     .rev()
-                    .find(|&len| rest.ends_with(&value[..len]))
+                    .find(|&len| buffer.ends_with(&value[..len]))
                     .unwrap_or(0)
             })
             .max()
