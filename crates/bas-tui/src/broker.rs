@@ -790,15 +790,16 @@ impl BrokerApp {
             }
         }
         self.events.pause().await;
-        ratatui::restore();
+        crossterm::terminal::disable_raw_mode()?;
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
         let edited = tokio::task::block_in_place(|| proposal::editor(&path).status());
-        *terminal = ratatui::try_init()?;
-        // The editor left its text on the screen. Clearing through crossterm, not
-        // Terminal::clear, avoids asking the terminal for the cursor position.
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-        )?;
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+        // The editor left its text on the screen. Resizing to the same area clears the
+        // screen and the back buffer, as Terminal::clear does, without asking the terminal
+        // for the cursor position.
+        let area = terminal.size()?.into();
+        terminal.resize(area)?;
         self.events.resume();
         match edited {
             Ok(status) if status.success() => {}
