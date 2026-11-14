@@ -15,14 +15,14 @@ use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind,
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::USER_AGENT;
-use crate::app::{Status, is_typing};
+use crate::app::is_typing;
 use crate::event::{AppEvent, Event, EventHandler};
-use crate::ui::{HIDDEN, panel};
+use crate::ui::{HIDDEN, Status, panel, status_line};
 
 /// State of the sign-in screen.
 struct SignIn {
@@ -178,11 +178,7 @@ impl Widget for &SignIn {
             .wrap(Wrap { trim: false })
             .block(panel("Sign in"))
             .render(body, buf);
-        match &self.status {
-            Status::Info(text) => Line::from(format!(" {text}")),
-            Status::Error(text) => Line::from(format!(" {text}")).fg(Color::Red).bold(),
-        }
-        .render(status, buf);
+        status_line(&self.status).render(status, buf);
         Line::from(" paste the token  Enter sign in  Backspace erase  Esc quit")
             .dim()
             .render(keys, buf);

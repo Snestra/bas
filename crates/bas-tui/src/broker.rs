@@ -2,7 +2,7 @@
 //! token and without ever seeing a value.
 //!
 //! The app lists the active policy's entries, and starts the same requests as `bas add`,
-//! `bas rotate`, `bas policy edit`, and `bas passkey add`. A passkey on the phone approves
+//! `bas rotate`, `bas policy edit`, and `bas passkey add`. An enrolled passkey approves
 //! each of them on the broker's approval page, and a new value is typed only there. The
 //! requests panel shows every request this app started and every one the broker reports as
 //! pending, as sending, pending, approved, done, denied, expired, refused, or failed.
@@ -15,14 +15,16 @@ use std::sync::Arc;
 use arboard::Clipboard;
 use bas_broker::client::{Client, Outcome};
 use bas_broker::protocol::{
-    ActivePolicy, AddSecret, ApprovalState, EntrySummary, PolicyProposal, SecretEntry, Status,
-    summarize_policy,
+    self, ActivePolicy, AddSecret, ApprovalState, EntryKind, EntrySummary, PolicyProposal,
+    SecretEntry, summarize_policy,
 };
 use bas_broker::{ErrorKind, proposal};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
+use crate::app::is_typing;
 use crate::event::{AppEvent, Event, EventHandler};
+use crate::ui::Status;
 
 /// How long each approval wait lasts before the app asks again.
 const WAIT_SECONDS: u32 = 25;
@@ -37,7 +39,7 @@ type Call =
 #[derive(Debug)]
 pub enum Update {
     /// `GET /v1/status` answered.
-    Status(Result<Status, bas_broker::Error>),
+    Status(Result<protocol::Status, bas_broker::Error>),
     /// `GET /v1/policy` answered. `sync` asks to rewrite the proposal file from it.
     Policy {
         result: Result<ActivePolicy, bas_broker::Error>,
@@ -84,7 +86,7 @@ pub struct Request {
     pub kind: RequestKind,
     /// Approval ID, once the broker opened one.
     pub id: Option<String>,
-    /// Page to open on the phone.
+    /// The approval page to open.
     pub url: Option<String>,
     /// The diff of a policy change.
     pub diff: Option<String>,
@@ -109,13 +111,13 @@ pub enum RequestKind {
 pub enum RequestState {
     /// On its way to the broker.
     Sending,
-    /// Waiting for the phone.
+    /// Waiting for an approval.
     Pending,
-    /// Approved on the phone and applied, with what the broker reported.
+    /// Approved on the approval page and applied, with what the broker reported.
     Approved(String),
     /// Finished without an approval, such as dropped minted tokens.
     Done(String),
-    /// Denied on the phone.
+    /// Denied on the approval page.
     Denied,
     /// Nobody answered in time.
     Expired,
@@ -176,7 +178,7 @@ impl AddField {
     }
 }
 
-/// The add form. It never holds a value: the value is typed on the phone.
+/// The add form. It never holds a value: the value is typed on the approval page.
 #[derive(Debug, Clone)]
 pub struct AddForm {
     pub focus: AddField,
@@ -272,13 +274,6 @@ pub enum Confirm {
     Passkey,
 }
 
-/// The status line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Message {
-    Info(String),
-    Error(String),
-}
-
 /// Broker mode state.
 pub struct BrokerApp {
     running: bool,
@@ -294,7 +289,7 @@ pub struct BrokerApp {
     pub request_selected: usize,
     pub focus: Focus,
     pub modal: Option<Modal>,
-    pub message: Message,
+    pub message: Status,
     clipboard: Option<Clipboard>,
     next_key: u64,
     ticks: u32,
@@ -319,7 +314,7 @@ impl BrokerApp {
             request_selected: 0,
             focus: Focus::Entries,
             modal: None,
-            message: Message::Info(format!("Connecting to the broker at {}", socket.display())),
+            message: Status::Info(format!("Connecting to the broker at {}", socket.display())),
             clipboard: Clipboard::new().ok(),
             next_key: 0,
             ticks: 0,
@@ -418,7 +413,7 @@ impl BrokerApp {
         }
     }
 
-    fn on_status(&mut self, result: Result<Status, bas_broker::Error>) {
+    fn on_status(&mut self, result: Result<protocol::Status, bas_broker::Error>) {
         self.status_in_flight = false;
         let status = match result {
             Ok(status) => status,
@@ -430,7 +425,7 @@ impl BrokerApp {
         let policy_changed = match &self.connection {
             Connection::Connected { policy_hash, .. } => *policy_hash != status.policy_hash,
             _ => {
-                self.message = Message::Info("Connected to the broker".to_owned());
+                self.message = Status::Info("Connected to the broker".to_owned());
                 true
             }
         };
@@ -492,14 +487,18 @@ impl BrokerApp {
             });
             self.message = match synced {
                 Ok(path) => {
-                    Message::Info(format!("Rewrote {} from the active policy", path.display()))
+                    Status::Info(format!("Rewrote {} from the active policy", path.display()))
                 }
-                Err(err) => Message::Error(err.to_string()),
+                Err(err) => Status::Error(err.to_string()),
             };
         }
     }
 
     fn on_sent(&mut self, key: u64, result: Result<Outcome<serde_json::Value>, bas_broker::Error>) {
+        if let Ok(Outcome::Waiting(accepted)) = &result {
+            // A status poll can list this approval before this reply names it as ours.
+            self.drop_other(&accepted.approval.id);
+        }
         let Some(request) = self.requests.iter_mut().find(|request| request.key == key) else {
             return;
         };
@@ -509,8 +508,8 @@ impl BrokerApp {
                 request.url = Some(accepted.approval.url.clone());
                 request.diff = accepted.diff;
                 request.state = RequestState::Pending;
-                self.message = Message::Info(format!(
-                    "Approve {} on your phone: {}",
+                self.message = Status::Info(format!(
+                    "Approve {} with your passkey: {}",
                     request.action, accepted.approval.url
                 ));
                 self.watch(key, accepted.approval.id);
@@ -525,12 +524,12 @@ impl BrokerApp {
                     }
                     _ => describe_result(Some(&result)),
                 };
-                self.message = Message::Info(format!("{}: {text}", request.action));
+                self.message = Status::Info(format!("{}: {text}", request.action));
                 request.state = RequestState::Done(text);
             }
             Err(err) => {
                 let text = err.to_string();
-                self.message = Message::Error(format!("{}: {text}", request.action));
+                self.message = Status::Error(format!("{}: {text}", request.action));
                 request.state = if err.kind() == ErrorKind::Refused {
                     RequestState::Refused(text)
                 } else {
@@ -538,6 +537,25 @@ impl BrokerApp {
                 };
             }
         }
+    }
+
+    /// Removes the row another client's request got for approval `id`, keeping the
+    /// selection on the same row.
+    fn drop_other(&mut self, id: &str) {
+        let Some(index) = self
+            .requests
+            .iter()
+            .position(|request| !request.mine && request.id.as_deref() == Some(id))
+        else {
+            return;
+        };
+        self.requests.remove(index);
+        if self.request_selected > index {
+            self.request_selected -= 1;
+        }
+        self.request_selected = self
+            .request_selected
+            .min(self.requests.len().saturating_sub(1));
     }
 
     fn on_state(&mut self, key: u64, result: Result<ApprovalState, bas_broker::Error>) {
@@ -560,12 +578,10 @@ impl BrokerApp {
         let kind = request.kind;
         let action = request.action.clone();
         self.message = match &state {
-            RequestState::Approved(text) => Message::Info(format!("{action}: approved, {text}")),
-            RequestState::Denied => {
-                Message::Error(format!("{action}: denied on the approval page"))
-            }
-            RequestState::Expired => Message::Error(format!("{action}: expired")),
-            RequestState::Failed(text) => Message::Error(format!("{action}: {text}")),
+            RequestState::Approved(text) => Status::Info(format!("{action}: approved, {text}")),
+            RequestState::Denied => Status::Error(format!("{action}: denied on the approval page")),
+            RequestState::Expired => Status::Error(format!("{action}: expired")),
+            RequestState::Failed(text) => Status::Error(format!("{action}: {text}")),
             _ => self.message.clone(),
         };
         request.state = state;
@@ -593,7 +609,7 @@ impl BrokerApp {
             state: RequestState::Sending,
         });
         self.request_selected = self.requests.len() - 1;
-        self.message = Message::Info(format!("Sending {action}"));
+        self.message = Status::Info(format!("Sending {action}"));
         let future = call(Arc::clone(&self.client));
         self.events.spawn(async move {
             AppEvent::Broker(Box::new(Update::Sent {
@@ -631,7 +647,7 @@ impl BrokerApp {
                         self.watch(request.key, id.clone());
                     }
                 }
-                self.message = Message::Info("Refreshing".to_owned());
+                self.message = Status::Info("Refreshing".to_owned());
             }
             KeyCode::Char('a') => self.modal = Some(Modal::Add(AddForm::new())),
             KeyCode::Char('r') => self.ask_rotate(),
@@ -672,17 +688,18 @@ impl BrokerApp {
 
     fn ask_rotate(&mut self) {
         let Some(entry) = self.selected_entry() else {
-            self.message = Message::Error("Select a policy entry to rotate".to_owned());
+            self.message = Status::Error("Select a policy entry to rotate".to_owned());
             return;
         };
         if !entry.kind.rotatable() {
-            self.message = Message::Error(format!(
-                "{} is an ssh key; replace it with a policy change (e)",
-                entry.name
-            ));
+            let fix = match entry.kind {
+                EntryKind::Helper => "is a helper value; remove it with a policy change (e)",
+                _ => "is an ssh key; replace it with a policy change (e)",
+            };
+            self.message = Status::Error(format!("{} {fix}", entry.name));
             return;
         }
-        let minted = matches!(entry.name.as_str(), "github" | "tailscale");
+        let minted = matches!(entry.kind, EntryKind::Github | EntryKind::Tailscale);
         self.modal = Some(Modal::Confirm(Confirm::Rotate {
             name: entry.name.clone(),
             minted,
@@ -695,16 +712,16 @@ impl BrokerApp {
             .get(self.request_selected)
             .and_then(|request| request.url.clone())
         else {
-            self.message = Message::Error("The selected request has no approval page".to_owned());
+            self.message = Status::Error("The selected request has no approval page".to_owned());
             return;
         };
         let Some(clipboard) = self.clipboard.as_mut() else {
-            self.message = Message::Error("No clipboard is available here".to_owned());
+            self.message = Status::Error("No clipboard is available here".to_owned());
             return;
         };
         self.message = match clipboard.set_text(url) {
-            Ok(()) => Message::Info("Copied the approval page address".to_owned()),
-            Err(_) => Message::Error("Could not write the clipboard".to_owned()),
+            Ok(()) => Status::Info("Copied the approval page address".to_owned()),
+            Err(_) => Status::Error("Could not write the clipboard".to_owned()),
         };
     }
 
@@ -761,7 +778,7 @@ impl BrokerApp {
             KeyCode::Backspace => {
                 form.text_mut().pop();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c) if is_typing(key) => {
                 form.text_mut().push(c);
             }
             _ => {}
@@ -775,7 +792,7 @@ impl BrokerApp {
         let path = match proposal::path() {
             Ok(path) => path,
             Err(err) => {
-                self.message = Message::Error(err.to_string());
+                self.message = Status::Error(err.to_string());
                 return Ok(());
             }
         };
@@ -785,7 +802,7 @@ impl BrokerApp {
                 Err(err) => Err(err),
             };
             if let Err(err) = started {
-                self.message = Message::Error(err.to_string());
+                self.message = Status::Error(err.to_string());
                 return Ok(());
             }
         }
@@ -803,18 +820,18 @@ impl BrokerApp {
         match edited {
             Ok(status) if status.success() => {}
             Ok(_) => {
-                self.message = Message::Error("The editor failed; nothing was sent".to_owned());
+                self.message = Status::Error("The editor failed; nothing was sent".to_owned());
                 return Ok(());
             }
             Err(err) => {
-                self.message = Message::Error(format!("Could not start the editor: {err}"));
+                self.message = Status::Error(format!("Could not start the editor: {err}"));
                 return Ok(());
             }
         }
         let toml = match proposal::read(&path) {
             Ok(toml) => toml,
             Err(err) => {
-                self.message = Message::Error(err.to_string());
+                self.message = Status::Error(err.to_string());
                 return Ok(());
             }
         };

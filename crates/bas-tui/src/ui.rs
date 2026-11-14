@@ -11,8 +11,15 @@ use ratatui::widgets::{
 };
 
 use crate::app::{
-    App, DeleteTarget, Field, Modal, Screen, SecretForm, SecretScreen, SecretsScreen, Status,
+    App, DeleteTarget, Field, Modal, Screen, SecretForm, SecretScreen, SecretsScreen,
 };
+
+/// The status line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Status {
+    Info(String),
+    Error(String),
+}
 
 /// Shown in place of a hidden value. Fixed width, so it does not reveal the length.
 pub(crate) const HIDDEN: &str = "••••••••";
@@ -125,7 +132,7 @@ impl App {
         render_list(rows, list.selected, Block::new(), list_area, buf);
     }
 
-    fn render_secret(&self, screen: &SecretScreen, area: Rect, buf: &mut Buffer) {
+    fn render_secret<'a>(&self, screen: &'a SecretScreen, area: Rect, buf: &mut Buffer) {
         let block = panel("Secret");
         let Some(detail) = &screen.detail else {
             Paragraph::new("Reading the secret")
@@ -133,11 +140,11 @@ impl App {
                 .render(area, buf);
             return;
         };
-        let shown = |value: &SecretText| {
+        let shown = |value: &'a SecretText| {
             if screen.revealed {
-                value.expose().to_owned()
+                value.expose()
             } else {
-                HIDDEN.to_owned()
+                HIDDEN
             }
         };
         let project = detail
@@ -160,29 +167,30 @@ impl App {
             .render(area, buf);
     }
 
-    fn render_form(&self, form: &SecretForm, area: Rect, buf: &mut Buffer) {
+    fn render_form<'a>(&self, form: &'a SecretForm, area: Rect, buf: &mut Buffer) {
         let title = if form.saving.is_some() {
             format!("{} (saving)", self.title())
         } else {
             self.title()
         };
-        let masked = |value: &SecretText| {
+        let masked = |value: &'a SecretText| {
             if form.revealed {
-                value.expose().to_owned()
+                value.expose()
             } else if value.is_empty() {
-                String::new()
+                ""
             } else {
-                HIDDEN.to_owned()
+                HIDDEN
             }
         };
         let project = form
             .project
             .map_or_else(|| "pick a project".to_owned(), |id| self.project_name(id));
+        let project = format!("< {project} >");
         let fields = [
-            (Field::Key, "Key", form.key.clone()),
+            (Field::Key, "Key", form.key.as_str()),
             (Field::Value, "Value", masked(&form.value)),
             (Field::Note, "Note", masked(&form.note)),
-            (Field::Project, "Project", format!("< {project} >")),
+            (Field::Project, "Project", project.as_str()),
         ];
         let lines: Vec<Line> = fields
             .into_iter()
@@ -200,7 +208,12 @@ impl App {
                         format!("{marker}{label}"),
                         style.add_modifier(Modifier::BOLD),
                     ),
-                    Line::styled(format!("  {text}{cursor}"), style),
+                    Line::from_iter(
+                        std::iter::once("  ")
+                            .chain(text.lines())
+                            .chain(std::iter::once(cursor)),
+                    )
+                    .style(style),
                     Line::default(),
                 ]
             })
@@ -301,11 +314,7 @@ impl App {
             Constraint::Length(u16::try_from(width).unwrap_or(u16::MAX)),
         ])
         .areas(area);
-        let message = match &self.status {
-            Status::Info(text) => Line::from(format!(" {text}")),
-            Status::Error(text) => Line::from(format!(" {text}")).fg(Color::Red).bold(),
-        };
-        message.render(message_area, buf);
+        status_line(&self.status).render(message_area, buf);
         if let Some(countdown) = countdown {
             Line::from(countdown).reversed().render(countdown_area, buf);
         }
@@ -406,6 +415,13 @@ fn help_lines() -> Vec<Line<'static>> {
     .into_iter()
     .map(Line::from)
     .collect()
+}
+
+pub(crate) fn status_line(status: &Status) -> Line<'_> {
+    match status {
+        Status::Info(text) => Line::from(format!(" {text}")),
+        Status::Error(text) => Line::from(format!(" {text}")).fg(Color::Red).bold(),
+    }
 }
 
 pub(crate) fn panel(title: &str) -> Block<'static> {
