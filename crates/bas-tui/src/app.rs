@@ -13,6 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use crate::event::{AppEvent, Event, EventHandler, WriteOutcome};
+use crate::ui::Status;
 
 /// How long a copied value stays on the clipboard before it is cleared.
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
@@ -208,12 +209,6 @@ impl DeleteTarget {
     }
 }
 
-/// The status line.
-pub enum Status {
-    Info(String),
-    Error(String),
-}
-
 /// A value this app put on the clipboard.
 pub struct Copied {
     pub text: Zeroizing<String>,
@@ -242,7 +237,7 @@ impl App {
         Self {
             running: true,
             events,
-            vault_base: web_vault_base(profile.endpoints.api()),
+            vault_base: profile.endpoints.web_vault().to_owned(),
             organization: profile.organization,
             session: None,
             projects: Vec::new(),
@@ -258,15 +253,14 @@ impl App {
         }
     }
 
-    /// Runs the main loop, then clears the clipboard if it still holds a copied value.
+    /// Runs the main loop. Dropping the app afterwards clears the clipboard if it still holds a
+    /// copied value.
     ///
     /// # Errors
     ///
     /// Fails when drawing fails, the event task dies, or login fails.
     pub async fn run(mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
-        let result = self.event_loop(terminal).await;
-        self.clear_clipboard();
-        result
+        self.event_loop(terminal).await
     }
 
     async fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
@@ -462,27 +456,28 @@ impl App {
     }
 
     fn on_secret(&mut self, request: u64, result: color_eyre::Result<Secret>) {
-        let Some(Screen::Secret(screen)) = self.screens.last_mut() else {
+        let Some(index) = self.screens.iter().rposition(
+            |screen| matches!(screen, Screen::Secret(screen) if screen.request == request),
+        ) else {
             return;
         };
-        if screen.request != request {
-            return;
-        }
+        let on_top = index + 1 == self.screens.len();
         match result {
             Ok(detail) => {
-                let edit = screen.edit_on_load;
+                let Screen::Secret(screen) = &mut self.screens[index] else {
+                    return;
+                };
+                let edit = on_top && screen.edit_on_load;
                 screen.edit_on_load = false;
                 self.status = Status::Info(format!("Read {}", detail.key()));
-                if edit {
-                    let form = edit_form(&detail);
-                    screen.detail = Some(detail);
+                let form = edit.then(|| edit_form(&detail));
+                screen.detail = Some(detail);
+                if let Some(form) = form {
                     self.screens.push(Screen::Form(form));
-                } else {
-                    screen.detail = Some(detail);
                 }
             }
             Err(err) => {
-                self.screens.pop();
+                self.screens.remove(index);
                 self.status = Status::Error(format!("Could not read the secret: {err}"));
             }
         }
@@ -1120,18 +1115,6 @@ impl App {
             self.copied = Some(copied);
             Status::Error("Could not clear the clipboard".to_owned())
         };
-    }
-}
-
-/// The web vault origin that belongs to a Secrets Manager API URL.
-///
-/// The two Bitwarden cloud regions map to their vault hosts. A self-hosted server serves
-/// the vault at the API URL without its trailing `/api`.
-fn web_vault_base(api_url: &str) -> String {
-    match api_url {
-        "https://api.bitwarden.com" => "https://vault.bitwarden.com".to_owned(),
-        "https://api.bitwarden.eu" => "https://vault.bitwarden.eu".to_owned(),
-        other => other.strip_suffix("/api").unwrap_or(other).to_owned(),
     }
 }
 

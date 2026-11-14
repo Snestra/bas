@@ -18,11 +18,11 @@ mod store;
 pub const ACCESS_TOKEN_VAR: &str = "BWS_ACCESS_TOKEN";
 
 /// Pairing token variable read by the upstream Agent Access CLI.
-pub const AGENT_ACCESS_TOKEN_VAR: &str = "AAC_TOKEN";
+const AGENT_ACCESS_TOKEN_VAR: &str = "AAC_TOKEN";
 
 /// Name of the systemd credential that holds the machine token of `systemd-credential`
 /// profiles.
-pub const SYSTEMD_CREDENTIAL: &str = "bws";
+const SYSTEMD_CREDENTIAL: &str = "bws";
 
 /// Directory where systemd puts the credentials of a service. The broker's launchd plist
 /// on macOS sets it to a directory only the broker's account can read.
@@ -166,7 +166,7 @@ pub fn load_environment_token(profile: &ProfileName) -> Result<MachineToken, Err
 ///
 /// Fails when the process has no credentials directory, or the file is missing, unreadable,
 /// or does not hold a machine token.
-pub fn load_systemd_token(profile: &ProfileName) -> Result<MachineToken, Error> {
+fn load_systemd_token(profile: &ProfileName) -> Result<MachineToken, Error> {
     let missing = || {
         Error::new(format!(
             "profile '{profile}' reads its token from the credential \

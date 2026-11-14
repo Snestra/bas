@@ -39,6 +39,13 @@ pub enum Region {
 impl Region {
     /// Hosted regions in the order a sign-in without an endpoint tries them.
     pub const ALL: [Self; 2] = [Self::Us, Self::Eu];
+
+    fn web_vault(self) -> &'static str {
+        match self {
+            Self::Us => "https://vault.bitwarden.com",
+            Self::Eu => "https://vault.bitwarden.eu",
+        }
+    }
 }
 
 /// Endpoint choices exactly as the user gave them, before validation.
@@ -136,6 +143,21 @@ impl Endpoints {
     #[must_use]
     pub fn identity(&self) -> &str {
         self.identity_url.as_str().trim_end_matches('/')
+    }
+
+    /// Web vault origin, such as `https://vault.bitwarden.com`.
+    ///
+    /// A hosted region's API maps to its vault host. A self-hosted server serves the vault
+    /// at the API URL without its trailing `/api`.
+    #[must_use]
+    pub fn web_vault(&self) -> &str {
+        let api = self.api();
+        Region::ALL
+            .into_iter()
+            .find(|region| Self::hosted(*region).api() == api)
+            .map_or(api.strip_suffix("/api").unwrap_or(api), |region| {
+                region.web_vault()
+            })
     }
 
     fn validate(&self) -> Result<(), Error> {

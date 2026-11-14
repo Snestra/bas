@@ -8,9 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, ListItem, Paragraph, Widget, Wrap};
 
 use crate::broker::{
-    AddField, AddForm, BrokerApp, Confirm, Connection, Focus, Message, Modal, Request, RequestState,
+    AddField, AddForm, BrokerApp, Confirm, Connection, Focus, Modal, Request, RequestState,
 };
-use crate::ui::{centered, field_line, panel, render_list};
+use crate::ui::{centered, field_line, panel, render_list, status_line};
 
 /// Most request rows the requests panel shows before it scrolls.
 const REQUEST_ROWS: usize = 8;
@@ -33,11 +33,7 @@ impl Widget for &BrokerApp {
         self.render_entries(list, buf);
         self.render_detail(detail, buf);
         self.render_requests(requests, buf);
-        let message = match &self.message {
-            Message::Info(text) => Line::from(format!(" {text}")),
-            Message::Error(text) => Line::from(format!(" {text}")).fg(Color::Red).bold(),
-        };
-        message.render(status, buf);
+        status_line(&self.message).render(status, buf);
         Line::from(self.key_hints()).dim().render(keys, buf);
         if let Some(modal) = &self.modal {
             self.render_modal(modal, area, buf);
@@ -305,8 +301,10 @@ fn details_lines(request: &Request) -> Vec<Line<'static>> {
 
 fn add_lines(form: &AddForm) -> Vec<Line<'static>> {
     let mut lines = vec![
-        Line::from("The broker opens an approval. You type the value on the phone, never here.")
-            .dim(),
+        Line::from(
+            "The broker opens an approval. You type the value on the approval page, never here.",
+        )
+        .dim(),
         Line::default(),
     ];
     for field in AddField::ALL {
@@ -341,11 +339,11 @@ fn confirm_lines(confirm: &Confirm) -> Vec<Line<'static>> {
             minted: false,
         } => vec![
             format!("Rotate {name}?"),
-            "The broker opens an approval. You type the new value on the phone.".to_owned(),
+            "The broker opens an approval. You type the new value on the approval page.".to_owned(),
         ],
         Confirm::Passkey => vec![
             "Enroll one more passkey?".to_owned(),
-            "An enrolled passkey approves it, and the approving phone shows a one-time link."
+            "An enrolled passkey approves it, and the approval page shows a one-time link."
                 .to_owned(),
         ],
     };
