@@ -288,11 +288,7 @@ fn bare_invocation_prints_usage_and_exits_2(runner: &mut Runner) -> Step {
 fn doctor_reports_offline_readiness(runner: &mut Runner) -> Step {
     let observation = runner.bas("doctor", ["doctor"]);
     ensure(observation.exited_with(0), "doctor exits 0 offline")?;
-    for label in [
-        "build",
-        "profiles",
-        "machine token",
-    ] {
+    for label in ["build", "profiles", "machine token"] {
         ensure(
             observation.stdout_contains(label),
             "doctor reports all three offline checks",
