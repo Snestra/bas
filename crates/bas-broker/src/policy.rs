@@ -481,8 +481,30 @@ impl Policy {
             .map(Route::Secret)
     }
 
-    /// This policy's text with one more `[secret.NAME]` table at the end.
-    pub fn with_secret(&self, name: &str, entry: &SecretFile) -> Result<String, Invalid> {
+    /// Checks that adding `entry` as `[secret.NAME]` gives a valid policy, before its secret
+    /// exists. A nil ID stands in for the reference the broker creates later.
+    pub fn check_new_secret(
+        &self,
+        name: &str,
+        entry: &SecretFile,
+        profile: &ProfileName,
+    ) -> Result<(), Invalid> {
+        let mut candidate = entry.clone();
+        candidate.reference = SecretRef {
+            profile: profile.clone(),
+            id: bas_core::Uuid::nil(),
+        }
+        .to_string();
+        self.with_secret(name, &candidate, profile).map(drop)
+    }
+
+    /// This policy with one more `[secret.NAME]` table at the end.
+    pub fn with_secret(
+        &self,
+        name: &str,
+        entry: &SecretFile,
+        profile: &ProfileName,
+    ) -> Result<Self, Invalid> {
         let mut table = BTreeMap::new();
         table.insert(name.to_owned(), entry.clone());
         let mut wrapper = BTreeMap::new();
@@ -497,7 +519,7 @@ impl Policy {
         }
         text.push('\n');
         text.push_str(&added);
-        Ok(text)
+        Self::parse(&text, profile)
     }
 }
 

@@ -41,6 +41,9 @@ pub struct Broker {
     /// Enrolled passkeys.
     pub passkeys: Passkeys,
     policy: RwLock<Arc<Policy>>,
+    /// Held for the whole of `apply`, so one approval reads the policy and writes the next
+    /// one before another starts.
+    applying: tokio::sync::Mutex<()>,
 }
 
 /// What an approved request produced, and a link shown only to the approving phone.
@@ -73,6 +76,7 @@ impl Broker {
             approvals: Approvals::default(),
             passkeys,
             policy: RwLock::new(Arc::new(policy)),
+            applying: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -83,6 +87,7 @@ impl Broker {
 
     /// Applies an approved request. `value` is the text typed on the phone.
     pub async fn apply(&self, id: Uuid, kind: &Kind, value: Option<SecretText>) -> Applied {
+        let _applying = self.applying.lock().await;
         let mut enroll_url = None;
         let result = match kind {
             Kind::AddSecret { name, entry } => self.add_secret(id, name, entry, value).await,
@@ -92,7 +97,7 @@ impl Broker {
             } => self.replace_policy(id, toml, base_hash).await,
             Kind::Passkey => {
                 enroll_url = Some(self.passkeys.new_link());
-                Ok(serde_json::json!({ "enroll": "the link is shown on the approving phone" }))
+                Ok(serde_json::json!({ "enroll": "the link is shown on the approval page" }))
             }
         };
         let outcome = match result {
@@ -127,18 +132,10 @@ impl Broker {
                 "secret.{name} is already in the active policy"
             )));
         }
-        let profile = self.config.profile.name.clone();
-        // Check the entry against the current policy before anything is created.
-        let mut candidate = entry.clone();
-        candidate.reference = SecretRef {
-            profile: profile.clone(),
-            id: Uuid::nil(),
-        }
-        .to_string();
-        let text = policy
-            .with_secret(name, &candidate)
+        let profile = &self.config.profile.name;
+        policy
+            .check_new_secret(name, entry, profile)
             .map_err(|invalid| Error::new(invalid.message))?;
-        Policy::parse(&text, &profile).map_err(|invalid| Error::new(invalid.message))?;
 
         let note = SecretText::new(String::new());
         let created = self
@@ -155,11 +152,11 @@ impl Broker {
             profile: profile.clone(),
             id: created.id(),
         };
+        let mut candidate = entry.clone();
         candidate.reference = reference.to_string();
-        let text = policy
-            .with_secret(name, &candidate)
+        let next = policy
+            .with_secret(name, &candidate, profile)
             .map_err(|invalid| Error::new(invalid.message))?;
-        let next = Policy::parse(&text, &profile).map_err(|invalid| Error::new(invalid.message))?;
         self.install(next, id).await.map_err(|err| {
             Error::new(format!(
                 "created {reference} but could not add it to the policy: {err}"

@@ -30,7 +30,6 @@ toml.workspace = true
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "registry", "std"] }
 url.workspace = true
-uuid.workspace = true
 webauthn-rs = { version = "0.5.5", features = ["danger-credential-internals"] }
 zeroize.workspace = true
 

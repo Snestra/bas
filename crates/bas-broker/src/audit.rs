@@ -1,7 +1,7 @@
 //! Audit entries for every credential the broker hands out, adds, or refuses.
 //!
 //! Each audit entry carries `BAS_AUDIT=1` and `EVENT`, plus `NAME`, `PEER_UID`, `PEER_PID`,
-//! `HOST`, `APPROVAL_ID`, and `CLAIMED_ARGV` where they apply. No entry ever holds a value.
+//! `HOST`, `APPROVAL_ID`, `CLAIMED_ARGV`, and `CLAIMED_CWD` where they apply. No entry ever holds a value.
 //!
 //! On Linux the entries go to the system journal. journald adds `_SYSTEMD_UNIT` itself, so a
 //! client cannot forge an entry for the broker's unit.
@@ -82,27 +82,30 @@ pub fn read(
     since: Option<time::OffsetDateTime>,
     name: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, Error> {
+    use std::io::BufRead;
     use time::format_description::well_known::Rfc3339;
 
-    let text = std::fs::read_to_string(path)
-        .map_err(|err| crate::files::file_error("read", path, &err))?;
-    let entries = text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|entry| entry.get("bas_audit").is_some())
-        .filter(|entry| {
-            name.is_none_or(|name| entry.get("name").and_then(|n| n.as_str()) == Some(name))
-        })
-        .filter(|entry| {
-            since.is_none_or(|since| {
+    let failed = |err: std::io::Error| crate::files::file_error("read", path, &err);
+    let file = std::fs::File::open(path).map_err(failed)?;
+    let mut entries = Vec::new();
+    for line in std::io::BufReader::new(file).lines() {
+        let line = line.map_err(failed)?;
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let wanted = entry.get("bas_audit").is_some()
+            && name.is_none_or(|name| entry.get("name").and_then(|n| n.as_str()) == Some(name))
+            && since.is_none_or(|since| {
                 entry
                     .get("timestamp")
                     .and_then(|time| time.as_str())
                     .and_then(|time| time::OffsetDateTime::parse(time, &Rfc3339).ok())
                     .is_some_and(|time| time >= since)
-            })
-        })
-        .collect();
+            });
+        if wanted {
+            entries.push(entry);
+        }
+    }
     Ok(entries)
 }
 
@@ -116,7 +119,7 @@ pub struct Peer {
 }
 
 /// Records the names a `bas run` client will use through the proxy.
-pub fn run(names: &str, peer: Peer, claimed_argv: &str) {
+pub fn run(names: &str, peer: Peer, claimed_argv: &str, claimed_cwd: &str) {
     tracing::info!(
         bas_audit = 1,
         event = "run",
@@ -124,6 +127,7 @@ pub fn run(names: &str, peer: Peer, claimed_argv: &str) {
         peer_uid = peer.uid,
         peer_pid = peer.pid,
         claimed_argv,
+        claimed_cwd,
         "sent proxy settings for {names} to uid {}",
         peer.uid
     );
@@ -152,6 +156,19 @@ pub fn sign(name: &str, peer: Peer, purpose: &str) {
         peer_pid = peer.pid,
         purpose,
         "signed with ssh key {name} for uid {} ({purpose})",
+        peer.uid
+    );
+}
+
+/// Records that `bas rotate` dropped the cached tokens the broker minted for `name`.
+pub fn rotate(name: &str, peer: Peer) {
+    tracing::info!(
+        bas_audit = 1,
+        event = "rotate",
+        name,
+        peer_uid = peer.uid,
+        peer_pid = peer.pid,
+        "dropped the cached {name} tokens for uid {}",
         peer.uid
     );
 }
@@ -253,7 +270,8 @@ pub fn deny_peer(peer: Peer, reason: &str) {
     );
 }
 
-/// Records a `bas run` request for a name that is not a proxy entry.
+/// Records a `bas run` name that is not a proxy entry, or a `bas get` reference that is
+/// not a helper entry.
 pub fn deny_name(name: &str, peer: Peer, claimed_argv: &str, reason: &str) {
     tracing::info!(
         bas_audit = 1,

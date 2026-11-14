@@ -38,7 +38,7 @@ use hudsucker::{Body, HttpContext, HttpHandler, Proxy, RequestOrResponse};
 use tokio::net::TcpListener;
 use zeroize::Zeroizing;
 
-use crate::files::{create_dir, file_error, replace, write_new};
+use crate::files::{file_error, replace};
 use crate::policy::{self, GITHUB_HOSTS, Route};
 use crate::state::Broker;
 use crate::{Error, audit};
@@ -61,22 +61,25 @@ pub struct Authority {
 }
 
 impl Authority {
-    /// Loads the authority from `state_dir`, or creates it on first start. The private key
-    /// file is mode 0600.
+    /// Loads the authority from `state_dir`, or creates it when the key or the certificate
+    /// is missing. The private key file is mode 0600.
     pub fn load_or_create(state_dir: &Path) -> Result<Self, Error> {
         let key_path = state_dir.join(CA_KEY_FILE);
         let cert_path = state_dir.join(CA_CERT_FILE);
-        match std::fs::read_to_string(&key_path) {
-            Ok(key_pem) => {
-                let cert_pem = std::fs::read_to_string(&cert_path)
-                    .map_err(|err| file_error("read", &cert_path, &err))?;
+        let missing = |err: &std::io::Error| err.kind() == std::io::ErrorKind::NotFound;
+        match (
+            std::fs::read_to_string(&key_path),
+            std::fs::read_to_string(&cert_path),
+        ) {
+            (Ok(key_pem), Ok(cert_pem)) => {
                 return Ok(Self {
                     key_pem: Zeroizing::new(key_pem),
                     cert_pem,
                 });
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(file_error("read", &key_path, &err)),
+            (Err(err), _) if !missing(&err) => return Err(file_error("read", &key_path, &err)),
+            (_, Err(err)) if !missing(&err) => return Err(file_error("read", &cert_path, &err)),
+            _ => {}
         }
         let failed = |err: hudsucker::rcgen::Error| {
             Error::new(format!("could not create the proxy authority: {err}"))
@@ -100,9 +103,10 @@ impl Authority {
             key_pem: Zeroizing::new(key.serialize_pem()),
             cert_pem: cert.pem(),
         };
-        create_dir(state_dir)?;
-        write_new(&cert_path, authority.cert_pem.as_bytes(), 0o644)?;
-        write_new(&key_path, authority.key_pem.as_bytes(), 0o600)?;
+        // The certificate goes last, so a crash before it leaves a key alone, which the
+        // next start replaces.
+        replace(&key_path, authority.key_pem.as_bytes(), 0o600)?;
+        replace(&cert_path, authority.cert_pem.as_bytes(), 0o644)?;
         Ok(authority)
     }
 

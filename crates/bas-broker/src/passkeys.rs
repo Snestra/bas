@@ -28,7 +28,6 @@ use crate::{Error, audit};
 
 const PASSKEYS_FILE: &str = "passkeys.json";
 const ENROLL_FILE: &str = "enroll-url";
-/// Why a synced passkey is refused.
 /// How long an enrollment link made by an approval stays usable.
 const LINK_LIFETIME: Duration = Duration::from_secs(15 * 60);
 
@@ -285,7 +284,7 @@ impl Passkeys {
             .map_err(|err| Refused::Ceremony(format!("the assertion failed: {err}")))?;
         if !result.user_verified() {
             return Err(Refused::Ceremony(
-                "the phone did not verify the user".to_owned(),
+                "the passkey did not verify the user".to_owned(),
             ));
         }
         let mut inner = self.lock();
