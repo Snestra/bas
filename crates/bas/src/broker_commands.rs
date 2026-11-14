@@ -50,11 +50,12 @@ pub fn helper_value(reference: &SecretRef) -> Result<SecretText> {
     };
     let reply = crate::runtime()?
         .block_on(client().helper(&request))
-        .map_err(|err| {
-            Error::new(format!(
+        .map_err(|err| match err.kind() {
+            bas_broker::ErrorKind::Refused => Error::new(format!(
                 "{err}. On a broker host, bas get reads only references in a [helper.NAME] \
                  table of the broker's policy; add one with `bas policy edit`"
-            ))
+            )),
+            _ => broker_error(err),
         })?;
     Ok(SecretText::new(reply.value))
 }
