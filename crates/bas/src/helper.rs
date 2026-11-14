@@ -11,17 +11,14 @@
 //! never rewritten.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::io;
-use std::path::PathBuf;
 
 use bas_core::lock::ConfigLock;
-use bas_core::profile;
 use bas_core::reference::SecretRef;
 use serde::{Deserialize, Serialize};
 
 use crate::grant::Change;
 use crate::output::Error;
+use crate::private_toml::PrivateToml;
 
 const HELPER_FILE: &str = "helpers.toml";
 
@@ -39,7 +36,7 @@ struct HelperFile {
 /// The allowlisted references and the file they came from.
 #[derive(Debug)]
 pub struct Helpers {
-    path: PathBuf,
+    file: PrivateToml,
     references: BTreeSet<SecretRef>,
 }
 
@@ -51,46 +48,15 @@ impl Helpers {
     /// Fails when the file is unreadable, malformed, not a regular file, or accessible to
     /// other users. Callers then refuse instead of assuming any list.
     pub fn load() -> Result<Self, Error> {
-        let path = profile::config_dir()?.join(HELPER_FILE);
-        let unusable = |why: &str| {
-            Error::new(format!(
-                "helper allowlist {} {why}; no reference is allowed and nothing is rewritten \
-                 until it is fixed",
-                path.display()
-            ))
-        };
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    path,
-                    references: BTreeSet::new(),
-                });
-            }
-            Err(_) => return Err(unusable("is unreadable")),
-        };
-        if !metadata.is_file() {
-            return Err(unusable("is not a regular file"));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(unusable("is accessible to other users"));
-            }
-        }
-        let text = fs::read_to_string(&path).map_err(|_| unusable("is unreadable"))?;
-        let file: HelperFile = toml::from_str(&text).map_err(|_| unusable("is malformed"))?;
-        if file.version != VERSION {
-            return Err(unusable("has an unsupported version"));
-        }
+        let file = PrivateToml::new(HELPER_FILE, "helper allowlist", "no reference is allowed")?;
         let references = file
-            .helpers
+            .load(VERSION, |helpers: &HelperFile| helpers.version)?
+            .map_or_else(BTreeSet::new, |helpers| helpers.helpers)
             .iter()
             .map(|raw| raw.parse::<SecretRef>())
             .collect::<Result<BTreeSet<_>, _>>()
-            .map_err(|_| unusable("is malformed"))?;
-        Ok(Self { path, references })
+            .map_err(|_| file.unusable("is malformed"))?;
+        Ok(Self { file, references })
     }
 
     /// Allowlisted references in order.
@@ -127,20 +93,9 @@ impl Helpers {
     ///
     /// Fails if durable completion cannot be confirmed. The file may already have changed.
     pub fn save(&self, _lock: &ConfigLock) -> Result<(), Error> {
-        let failed = || {
-            Error::new(format!(
-                "could not confirm a durable update to helper allowlist {}; inspect it before \
-                 retrying",
-                self.path.display()
-            ))
-        };
-        let dir = self.path.parent().ok_or_else(failed)?;
-        profile::create_private_dir(dir).map_err(|_| failed())?;
-        let text = toml::to_string(&HelperFile {
+        self.file.save(&HelperFile {
             version: VERSION,
             helpers: self.references.iter().map(ToString::to_string).collect(),
         })
-        .map_err(|_| failed())?;
-        profile::replace_private_file(&self.path, text.as_bytes()).map_err(|_| failed())
     }
 }

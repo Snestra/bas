@@ -9,17 +9,15 @@
 //! authorizes nothing and is never rewritten.
 
 use std::collections::{BTreeSet, HashSet};
-use std::fs;
-use std::io;
-use std::path::PathBuf;
 
 use bas_core::lock::ConfigLock;
-use bas_core::profile::{self, Profiles};
+use bas_core::profile::Profiles;
 use bas_core::reference::ProfileName;
 use bas_core::{IdentityFingerprint, Uuid};
 use serde::{Deserialize, Serialize};
 
 use crate::output::{self, Error};
+use crate::private_toml::PrivateToml;
 
 const POLICY_FILE: &str = "grants.toml";
 
@@ -122,7 +120,7 @@ pub enum Change {
 /// All grants and the file they came from.
 #[derive(Debug)]
 pub struct Policy {
-    path: PathBuf,
+    file: PrivateToml,
     grants: Vec<Grant>,
 }
 
@@ -134,51 +132,18 @@ impl Policy {
     /// Fails when the file is unreadable, malformed, not a regular file, or accessible to
     /// other users. Callers then deny instead of assuming any grant or none.
     pub fn load() -> Result<Self, Error> {
-        let path = profile::config_dir()?.join(POLICY_FILE);
-        let unusable = |why: &str| {
-            Error::new(format!(
-                "grant policy {} {why}; no grant applies and nothing is rewritten until it is \
-                 fixed",
-                path.display()
-            ))
-        };
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    path,
-                    grants: Vec::new(),
-                });
-            }
-            Err(_) => return Err(unusable("is unreadable")),
-        };
-        if !metadata.is_file() {
-            return Err(unusable("is not a regular file"));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(unusable("is accessible to other users"));
-            }
-        }
-        let text = fs::read_to_string(&path).map_err(|_| unusable("is unreadable"))?;
-        let file: PolicyFile = toml::from_str(&text).map_err(|_| unusable("is malformed"))?;
-        if file.version != VERSION {
-            return Err(unusable("has an unsupported version"));
-        }
+        let file = PrivateToml::new(POLICY_FILE, "grant policy", "no grant applies")?;
+        let grants = file
+            .load(VERSION, |policy: &PolicyFile| policy.version)?
+            .map_or_else(Vec::new, |policy| policy.grants);
         let mut ids = HashSet::new();
-        let valid = file
-            .grants
+        let valid = grants
             .iter()
             .all(|grant| !grant.secrets.is_empty() && ids.insert(grant.id));
         if !valid {
-            return Err(unusable("is malformed"));
+            return Err(file.unusable("is malformed"));
         }
-        Ok(Self {
-            path,
-            grants: file.grants,
-        })
+        Ok(Self { file, grants })
     }
 
     pub fn grants(&self) -> &[Grant] {
@@ -213,18 +178,10 @@ impl Policy {
     ///
     /// Fails if durable completion cannot be confirmed. The file may already have changed.
     fn save(&self, _lock: &ConfigLock) -> Result<(), Error> {
-        let failed = || {
-            Error::new(format!(
-                "could not confirm a durable update to grant policy {}; inspect it before retrying",
-                self.path.display()
-            ))
-        };
-        let text = toml::to_string(&PolicyFile {
+        self.file.save(&PolicyFile {
             version: VERSION,
             grants: self.grants.clone(),
         })
-        .map_err(|_| failed())?;
-        profile::replace_private_file(&self.path, text.as_bytes()).map_err(|_| failed())
     }
 }
 

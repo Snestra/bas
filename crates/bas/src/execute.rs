@@ -199,7 +199,7 @@ fn env_value(name: &EnvName, value: SecretText) -> Result<SecretText, Error> {
 /// Retrieves each referenced secret once and returns values in binding order.
 fn resolve(bindings: &[Binding]) -> Result<Vec<SecretText>, Error> {
     let references: Vec<&SecretRef> = bindings.iter().map(|binding| &binding.reference).collect();
-    let retrieved = retrieve(&references)?;
+    let retrieved = retrieve(&references).map_err(Error::not_started)?;
     let missing: Vec<String> = bindings
         .iter()
         .filter(|binding| !retrieved.contains_key(&binding.reference))
