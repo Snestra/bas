@@ -51,9 +51,9 @@ pub enum Source<'a> {
 /// Appends one line per variable. The program must not start when this fails.
 pub fn record(variables: &[(&EnvName, Source<'_>)], program: &OsStr) -> Result<(), Error> {
     let path = path()?;
-    let failed = |_| {
+    let failed = |err| {
         Error::new(format!(
-            "not started: could not write the audit log {}",
+            "not started: could not write the audit log {}: {err}",
             path.display()
         ))
     };
@@ -101,9 +101,9 @@ pub fn record_get(reference: &SecretRef) -> Result<(), Error> {
     });
     let mut text = with_parent(line).to_string();
     text.push('\n');
-    append(&path, &text).map_err(|_| {
+    append(&path, &text).map_err(|err| {
         Error::new(format!(
-            "not printed: could not write the audit log {}",
+            "not printed: could not write the audit log {}: {err}",
             path.display()
         ))
     })
@@ -149,7 +149,20 @@ fn parent_program(pid: u32) -> Option<String> {
 /// Appends `lines` to the audit log with owner-only permissions and flushes them.
 fn append(path: &Path, lines: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        create_private_dir(parent)?;
+        bas_core::profile::create_private_dir(parent).map_err(|err| {
+            if parent.is_dir() {
+                std::io::Error::new(
+                    err.kind(),
+                    format!(
+                        "{} must be a directory you own with no group or other permissions \
+                         (chmod 700)",
+                        parent.display()
+                    ),
+                )
+            } else {
+                err
+            }
+        })?;
     }
     let mut options = OpenOptions::new();
     options.create(true).append(true);
@@ -161,15 +174,4 @@ fn append(path: &Path, lines: &str) -> std::io::Result<()> {
     let mut file = options.open(path)?;
     file.write_all(lines.as_bytes())?;
     file.sync_data()
-}
-
-fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
 }
