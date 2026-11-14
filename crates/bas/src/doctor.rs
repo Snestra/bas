@@ -2,9 +2,6 @@
 
 use std::env;
 
-use ap_client::MemoryIdentityProvider;
-use bitwarden::secrets_manager::{ClientSettings, SecretsManagerClient};
-
 use crate::output::{Check, Status};
 use bas_core::credential::{self, ACCESS_TOKEN_VAR};
 use bas_core::profile::{Profile, Profiles};
@@ -15,13 +12,7 @@ use bas_core::secrets::Session;
 /// No check opens a network connection or authenticates. Environment variables are
 /// tested for presence only and their values are never read into output.
 pub fn offline() -> Vec<Check> {
-    vec![
-        build(),
-        secrets_manager_sdk(),
-        agent_access_sdk(),
-        profile_configuration(),
-        access_token_variable(),
-    ]
+    vec![build(), profile_configuration(), access_token_variable()]
 }
 
 /// Authenticates one profile and confirms its organization without retrieving secrets.
@@ -61,32 +52,6 @@ fn build() -> Check {
             env::consts::OS,
             env::consts::ARCH
         ),
-    }
-}
-
-fn secrets_manager_sdk() -> Check {
-    let settings = ClientSettings::default();
-    let identity_url = settings.identity_url.clone();
-    let api_url = settings.api_url.clone();
-    let client = SecretsManagerClient::new(Some(settings));
-    let session = match client.get_access_token_organization() {
-        Some(_) => "authenticated",
-        None => "no session",
-    };
-    Check {
-        status: Status::Ready,
-        label: "secrets manager sdk",
-        detail: format!("{session}; SDK default endpoints {identity_url} and {api_url}"),
-    }
-}
-
-fn agent_access_sdk() -> Check {
-    let identity = MemoryIdentityProvider::new();
-    drop(identity);
-    Check {
-        status: Status::Ready,
-        label: "agent access sdk",
-        detail: "ephemeral device identity can be generated".to_owned(),
     }
 }
 

@@ -19,7 +19,6 @@ ap-relay-protocol.workspace = true
 arboard.workspace = true
 atomicwrites.workspace = true
 async-trait.workspace = true
-bitwarden.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 serde.workspace = true
