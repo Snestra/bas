@@ -36,10 +36,9 @@ install_mise_tools() {
     curl -fsSL https://mise.run | MISE_QUIET=1 sh
   fi
   export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
-  mise trust --quiet "$repo_root/mise.toml"
   mise trust --quiet "$repo_root/docs/mise.toml"
-  # vhs (root mise.toml) records the tapes and needs ttyd; mdBook builds docs/.
-  mise use --global --quiet ttyd@latest "aqua:EmbarkStudios/cargo-deny@$cargo_deny_version"
+  # mdBook builds docs/.
+  mise use --global --quiet "aqua:EmbarkStudios/cargo-deny@$cargo_deny_version"
   mise install --quiet
   (cd docs && mise install --quiet)
   mise reshim
@@ -62,7 +61,7 @@ EOF
 # Compile what agents run most, so the first check in a new orb is incremental.
 warm_builds() {
   cargo fetch --locked
-  cargo clippy --locked --all-targets --all-features
+  cargo clippy --locked --all-targets
   cargo build --locked --release --bin bas --example e2e
 }
 

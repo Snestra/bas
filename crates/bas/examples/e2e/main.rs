@@ -10,15 +10,10 @@
 //! cargo run --locked --example e2e -- live-direct --bas /abs/path/to/bas --artifacts /abs/new/dir
 //! ```
 
-#[path = "e2e/evidence.rs"]
 mod evidence;
-#[path = "e2e/live.rs"]
 mod live;
-#[path = "e2e/probe.rs"]
 mod probe;
-#[path = "e2e/runner.rs"]
 mod runner;
-#[path = "e2e/scenarios.rs"]
 mod scenarios;
 
 use std::fmt;

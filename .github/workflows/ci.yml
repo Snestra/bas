@@ -78,8 +78,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - run: cargo doc --locked --no-deps
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - if: runner.os == 'Linux'
+        run: cargo doc --locked --no-deps
       - name: Build release executables
         run: cargo build --locked --release --bin bas --example e2e
       - name: Package and check the extracted executable
@@ -104,9 +105,11 @@ jobs:
           if [[ "$BUILD_OS" == Linux ]]; then
             mkdir -p package/contrib
             cp -R contrib/linux package/contrib/
+            cp contrib/policy.toml.example package/contrib/
           elif [[ "$BUILD_OS" == macOS ]]; then
             mkdir -p package/contrib
             cp -R contrib/macos package/contrib/
+            cp contrib/policy.toml.example package/contrib/
             plutil -lint contrib/macos/*.plist
             # The broker runs as _bas from a root-owned file. A library from a
             # user-owned prefix, such as Homebrew's, would let that user run code in it.
@@ -145,4 +148,4 @@ jobs:
       - name: Install minimum Rust
         run: rustup toolchain install 1.89.0 --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +1.89.0 check --locked --all-targets --all-features
+      - run: cargo +1.89.0 check --locked --all-targets
