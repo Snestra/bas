@@ -269,15 +269,12 @@ fn ask_approval(broker: &Broker, kind: Kind, peer: Peer, diff: Option<String>) -
 }
 
 async fn status(State(broker): State<Arc<Broker>>, Allowed(_): Allowed) -> Json<Status> {
-    let pending = broker.approvals.pending();
     Json(Status {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         policy_hash: broker.policy().hash().to_owned(),
-        pending: pending
-            .iter()
-            .map(|view| view.id.hyphenated().to_string())
-            .collect(),
-        requests: pending
+        requests: broker
+            .approvals
+            .pending()
             .iter()
             .map(|view| PendingRequest {
                 id: view.id.hyphenated().to_string(),

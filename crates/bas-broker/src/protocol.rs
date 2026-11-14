@@ -27,10 +27,7 @@ pub struct Status {
     pub version: String,
     /// SHA-256 of the active policy text, in lowercase hex.
     pub policy_hash: String,
-    /// IDs of requests that wait for an approval.
-    pub pending: Vec<String>,
-    /// The same requests, with what each asks for. Brokers before 0.5 leave it out.
-    #[serde(default)]
+    /// Requests that wait for an approval, with what each asks for.
     pub requests: Vec<PendingRequest>,
 }
 

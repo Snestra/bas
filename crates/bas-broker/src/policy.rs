@@ -288,6 +288,11 @@ pub fn ambiguous_path(path: &str) -> bool {
             .any(|segment| segment == "." || segment == "..")
 }
 
+/// Names `bas run` takes to mean the `[github]` and `[tailscale]` tables.
+const BUILT_IN_NAMES: &[&str] = &["github", "tailscale"];
+const BUILT_IN_REASON: &str =
+    "the name is taken by the [github] and [tailscale] tables, so pick another";
+
 impl Policy {
     /// Parses and checks a policy text. Every `ref` must name `profile`, the broker's
     /// profile.
@@ -353,6 +358,9 @@ impl Policy {
             let invalid = |reason: &str| at(&table, format!("secret.{name}: {reason}"));
             name.parse::<EnvName>()
                 .map_err(|_| invalid("the name must be a valid environment variable name"))?;
+            if BUILT_IN_NAMES.contains(&name.as_str()) {
+                return Err(invalid(BUILT_IN_REASON));
+            }
             let reference = reference(&entry.reference, &table, "ref")?;
             let rule = proxy_rule(entry).map_err(|reason| invalid(&reason))?;
             if let Some(other) = hosts.insert(rule.host.clone(), format!("secret.{name}")) {
@@ -380,6 +388,9 @@ impl Policy {
                     format!("helper.{name}: the name must be a valid environment variable name"),
                 )
             })?;
+            if BUILT_IN_NAMES.contains(&name.as_str()) {
+                return Err(at(&table, format!("helper.{name}: {BUILT_IN_REASON}")));
+            }
             helpers.insert(name, reference(&entry.reference, &table, "ref")?);
         }
 
