@@ -581,7 +581,6 @@ dependencies = [
  "tracing-journald",
  "tracing-subscriber",
  "url",
- "uuid",
  "webauthn-rs",
  "zeroize",
 ]

@@ -313,7 +313,7 @@ async fn run_request(
             return refusal(StatusCode::FORBIDDEN, "denied", Some(name));
         }
     }
-    audit::run(&request.names.join(" "), peer, &claimed_argv);
+    audit::run(&request.names.join(" "), peer, &claimed_argv, &request.cwd);
     Json(RunReply {
         names: request.names,
         proxy: ProxyInfo {
@@ -396,16 +396,9 @@ async fn add_secret(
             Some(&name),
         );
     }
-    let mut candidate = request.entry.clone();
-    candidate.reference = SecretRef {
-        profile: broker.config.profile.name.clone(),
-        id: Uuid::nil(),
-    }
-    .to_string();
-    let checked = policy
-        .with_secret(&name, &candidate)
-        .and_then(|text| Policy::parse(&text, &broker.config.profile.name));
-    if let Err(invalid) = checked {
+    if let Err(invalid) =
+        policy.check_new_secret(&name, &request.entry, &broker.config.profile.name)
+    {
         return refusal(StatusCode::BAD_REQUEST, &invalid.message, Some(&name));
     }
     ask_phone(
@@ -456,13 +449,7 @@ async fn rotate(
         _ => false,
     };
     if minted {
-        tracing::info!(
-            bas_audit = 1,
-            event = "rotate",
-            name = name.as_str(),
-            peer_uid = peer.uid,
-            "dropped the cached {name} tokens"
-        );
+        audit::rotate(&name, peer);
         return Json(serde_json::json!({ "rotated": "minted" })).into_response();
     }
     refusal(
@@ -574,7 +561,12 @@ async fn audit_entries(
             );
         }
     };
-    match audit::read(&broker.audit_log, since, query.name.as_deref()) {
+    let path = broker.audit_log.clone();
+    let read =
+        tokio::task::spawn_blocking(move || audit::read(&path, since, query.name.as_deref()))
+            .await
+            .unwrap_or_else(|err| Err(Error::new(err.to_string())));
+    match read {
         Ok(entries) => Json(crate::protocol::AuditEntries { entries }).into_response(),
         Err(err) => {
             tracing::warn!("{err}");

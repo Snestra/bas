@@ -19,7 +19,7 @@ use crate::protocol::{
 use crate::{Error, ErrorKind};
 
 /// Environment variable that points `bas` at another broker socket, for development.
-pub const SOCKET_VAR: &str = "BAS_BROKER_SOCKET";
+const SOCKET_VAR: &str = "BAS_BROKER_SOCKET";
 
 /// The broker socket: `$BAS_BROKER_SOCKET`, or [`DEFAULT_SOCKET`].
 pub fn socket_path() -> PathBuf {
